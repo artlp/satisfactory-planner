@@ -34,6 +34,7 @@
   #wires path.temp { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; }
   #wires text { font-size: 11px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; pointer-events: none; }
   #wires text.full { fill: #ff8a84; }
+  #box { position: absolute; display: none; border: 1px dashed var(--accent); background: rgba(243, 156, 50, .08); pointer-events: none; z-index: 5; }
   .node { position: absolute; min-width: 160px; max-width: 240px; background: var(--panel); border: 2px solid var(--line);
     border-left-width: 6px; border-radius: 6px; padding: 5px 8px; cursor: move; user-select: none; }
   .node.sel { box-shadow: 0 0 0 2px var(--accent); }
@@ -80,7 +81,7 @@
 <main>
   <div id="viewport">
     <div id="world"><svg id="wires"></svg></div>
-    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Ctrl+C / Ctrl+V copies a node · Del removes selection</div>
+    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection</div>
   </div>
   <aside><div id="form"></div><div id="results"></div></aside>
 </main>

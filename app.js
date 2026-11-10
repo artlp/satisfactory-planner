@@ -112,7 +112,7 @@ function renderCanvas() {
   world.querySelectorAll('.node').forEach(el => el.remove());
   for (const n of G.nodes) {
     const el = document.createElement('div');
-    el.className = `node ${status(n)} ${JUNCTIONS.includes(n.type) ? 'junction' : ''} ${sel?.node === n.id ? 'sel' : ''}`;
+    el.className = `node ${status(n)} ${JUNCTIONS.includes(n.type) ? 'junction' : ''} ${selectedIds().includes(n.id) ? 'sel' : ''}`;
     el.dataset.id = n.id;
     el.style.left = n.x + 'px'; el.style.top = n.y + 'px';
     el.innerHTML = nodeHTML(n);
@@ -148,30 +148,47 @@ function renderWires(temp) {
 const toWorld = (cx, cy) => { const r = viewport.getBoundingClientRect(); return { x: (cx - r.left - view.x) / view.k, y: (cy - r.top - view.y) / view.k }; };
 let drag = null;
 
+const selectedIds = () => sel?.nodes ?? (sel?.node ? [sel.node] : []);
+const selectNodes = ids => select(ids.length > 1 ? { nodes: ids } : ids.length ? { node: ids[0] } : null);
+const boxEl = Object.assign(document.createElement('div'), { id: 'box' });
+world.appendChild(boxEl);
+
 viewport.addEventListener('pointerdown', ev => {
   if (ev.button !== 0) return;
   const port = ev.target.closest('.port.out'), nodeEl = ev.target.closest('.node'), edge = ev.target.dataset?.edge;
+  const p = toWorld(ev.clientX, ev.clientY);
   viewport.setPointerCapture(ev.pointerId);
   if (port) drag = { mode: 'wire', from: nodeEl.dataset.id };
   else if (nodeEl) {
-    const n = nodeById(nodeEl.dataset.id), p = toWorld(ev.clientX, ev.clientY);
-    drag = { mode: 'node', n, dx: p.x - n.x, dy: p.y - n.y, moved: false };
-    select({ node: n.id });
+    const id = nodeEl.dataset.id;
+    let ids = selectedIds();
+    if (ev.shiftKey) selectNodes(ids = ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+    else if (!ids.includes(id)) select({ node: id }), ids = [id];
+    // dragging any selected node moves the whole selection
+    drag = { mode: 'node', start: p, click: id, shift: ev.shiftKey, moved: false,
+      group: selectedIds().map(nodeById).map(n => ({ n, x: n.x, y: n.y })) };
   } else if (edge) select({ edge });
+  else if (ev.shiftKey) drag = { mode: 'box', start: p, keep: selectedIds() };
   else { drag = { mode: 'pan', sx: ev.clientX - view.x, sy: ev.clientY - view.y, moved: false }; viewport.classList.add('panning'); }
 });
 
-let mouse = null, clip = null; // last pointer position in world coords (paste target), copied node
+let mouse = null, clip = null; // last pointer position in world coords (paste target), copied nodes + belts
 viewport.addEventListener('pointerleave', () => { mouse = null; });
 viewport.addEventListener('pointermove', ev => {
   const p = mouse = toWorld(ev.clientX, ev.clientY);
   if (!drag) return;
   if (drag.mode === 'pan') { view.x = ev.clientX - drag.sx; view.y = ev.clientY - drag.sy; drag.moved = true; applyView(); }
   else if (drag.mode === 'node') {
-    drag.n.x = Math.round(p.x - drag.dx); drag.n.y = Math.round(p.y - drag.dy); drag.moved = true;
-    const el = world.querySelector(`.node[data-id="${drag.n.id}"]`);
-    el.style.left = drag.n.x + 'px'; el.style.top = drag.n.y + 'px';
+    drag.moved = true;
+    for (const g of drag.group) {
+      g.n.x = Math.round(g.x + p.x - drag.start.x); g.n.y = Math.round(g.y + p.y - drag.start.y);
+      const el = world.querySelector(`.node[data-id="${g.n.id}"]`);
+      el.style.left = g.n.x + 'px'; el.style.top = g.n.y + 'px';
+    }
     renderWires();
+  } else if (drag.mode === 'box') {
+    const r = drag.rect = { x: Math.min(p.x, drag.start.x), y: Math.min(p.y, drag.start.y), w: Math.abs(p.x - drag.start.x), h: Math.abs(p.y - drag.start.y) };
+    Object.assign(boxEl.style, { display: 'block', left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
   } else if (drag.mode === 'wire') renderWires({ a: portPos(drag.from, 'out'), b: p });
 });
 
@@ -183,8 +200,18 @@ viewport.addEventListener('pointerup', ev => {
     const to = target && nodeById(target.dataset.id);
     if (to && to.id !== drag.from && !['extractor', 'input'].includes(to.type)) connect(drag.from, to.id);
     else renderWires();
-  } else if (drag.mode === 'node' && drag.moved) save();
-  else if (drag.mode === 'pan' && !drag.moved) select(null);
+  } else if (drag.mode === 'node') {
+    if (drag.moved) save();
+    else if (!drag.shift && drag.group.length > 1) select({ node: drag.click }); // plain click on a group member picks just it
+  } else if (drag.mode === 'box') {
+    boxEl.style.display = 'none';
+    const r = drag.rect;
+    const hit = r ? G.nodes.filter(n => {
+      const el = world.querySelector(`.node[data-id="${n.id}"]`);
+      return n.x < r.x + r.w && n.x + el.offsetWidth > r.x && n.y < r.y + r.h && n.y + el.offsetHeight > r.y;
+    }).map(n => n.id) : [];
+    selectNodes([...new Set([...drag.keep, ...hit])]);
+  } else if (drag.mode === 'pan' && !drag.moved) select(null);
   drag = null;
 });
 
@@ -201,18 +228,27 @@ document.addEventListener('keydown', ev => {
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel) { ev.preventDefault(); removeSelected(); }
   if (ev.key === 'Escape') select(null);
   const mod = ev.ctrlKey || ev.metaKey, key = ev.key.toLowerCase();
-  if (mod && key === 'c' && sel?.node) clip = { ...nodeById(sel.node) };
+  if (mod && key === 'a') { ev.preventDefault(); selectNodes(G.nodes.map(n => n.id)); }
+  if (mod && key === 'c' && selectedIds().length) clip = copySelection();
   if (mod && key === 'v' && clip) {
     ev.preventDefault();
-    // paste under the cursor, or offset from the original when the cursor is off the board
-    if (mouse) cloneNode(clip, mouse.x - 20, mouse.y - 20);
-    else { clip.x += 30; clip.y += 30; cloneNode(clip, clip.x, clip.y); }
+    // paste with the group's top-left under the cursor, or offset from the original when the cursor is off the board
+    if (mouse) paste(clip, mouse.x - 20 - clip.x, mouse.y - 20 - clip.y);
+    else { clip.shift += 30; paste(clip, clip.shift, clip.shift); }
   }
 });
 
-function cloneNode(src, x, y) {
-  const n = { ...src, id: uid(), x: Math.round(x), y: Math.round(y) };
-  G.nodes.push(n); select({ node: n.id }); renderCanvas(); changed();
+function copySelection() {
+  const ids = selectedIds(), nodes = ids.map(nodeById).map(n => ({ ...n }));
+  return { nodes, edges: G.edges.filter(e => ids.includes(e.from) && ids.includes(e.to)).map(e => ({ ...e })),
+    x: Math.min(...nodes.map(n => n.x)), y: Math.min(...nodes.map(n => n.y)), shift: 0 };
+}
+
+function paste(c, dx, dy) {
+  const map = {};
+  for (const n of c.nodes) { map[n.id] = uid(); G.nodes.push({ ...n, id: map[n.id], x: Math.round(n.x + dx), y: Math.round(n.y + dy) }); }
+  for (const e of c.edges) G.edges.push({ ...e, id: uid(), from: map[e.from], to: map[e.to] });
+  renderCanvas(); selectNodes(Object.values(map)); changed();
 }
 
 function connect(from, to) {
@@ -245,7 +281,9 @@ function addNode(type) {
 }
 
 function removeSelected() {
-  if (sel?.node) { G.nodes = G.nodes.filter(n => n.id !== sel.node); G.edges = G.edges.filter(e => e.from !== sel.node && e.to !== sel.node); }
+  const ids = selectedIds();
+  G.nodes = G.nodes.filter(n => !ids.includes(n.id));
+  G.edges = G.edges.filter(e => !ids.includes(e.from) && !ids.includes(e.to));
   if (sel?.edge) G.edges = G.edges.filter(e => e.id !== sel.edge);
   select(null);
   changed();
@@ -253,7 +291,7 @@ function removeSelected() {
 
 function select(s) {
   sel = s;
-  world.querySelectorAll('.node').forEach(el => el.classList.toggle('sel', el.dataset.id === s?.node));
+  world.querySelectorAll('.node').forEach(el => el.classList.toggle('sel', selectedIds().includes(el.dataset.id)));
   renderWires();
   renderForm();
   renderResults();
@@ -303,6 +341,9 @@ function renderForm() {
       field(src.type === 'machine' ? 'Output port carries' : 'Only carry (smart splitter filter)',
         `<select data-k="item"><option value="">Any</option>${options(outs, e.item)}</select>`) +
       `<div class="row"><button class="danger" id="delBtn">Delete</button></div>`;
+  } else if (sel?.nodes) {
+    f.innerHTML = `<h2>${sel.nodes.length} nodes selected</h2><div class="muted">Drag any of them to move the group. Ctrl+C / Ctrl+V copies them with the belts between them. Shift+click adds or removes a node.</div>` +
+      `<div class="row"><button id="dupBtn">Duplicate</button><button class="danger" id="delBtn">Delete</button></div>`;
   } else f.innerHTML = '';
 
   f.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('change', () => {
@@ -320,7 +361,7 @@ function renderForm() {
     renderCanvas(); renderForm(); changed();
   }));
   $('#delBtn')?.addEventListener('click', removeSelected);
-  $('#dupBtn')?.addEventListener('click', () => { const n = nodeById(sel.node); cloneNode(n, n.x + 30, n.y + 30); });
+  $('#dupBtn')?.addEventListener('click', () => paste(copySelection(), 30, 30));
 }
 
 function rateTable(rows) {
