@@ -104,36 +104,48 @@ const moreOf = (m, item, amount, side) => {
 };
 
 // Plain-English "why is this not at 100% and what do I do about it". knock = caused by something else.
-function explain(n) {
+// Returns { lines, knock, short, root }: short = one-line cause for the node card, root = node with the real problem.
+function explain(n, seen = new Set()) {
   const r = RES.nodes[n.id];
-  if (!r || r.util === null || r.util >= 0.995 || !r.why || r.why === 'unconfigured') return null;
+  if (!r || r.util === null || r.util >= 0.995 || !r.why || r.why === 'unconfigured' || seen.has(n.id)) return null;
+  seen.add(n.id);
   const [kind, item] = r.why.split(':'), name = itemName(item), lines = [];
-  let knock = false;
+  let knock = false, short = reasonText(r.why), root = n, rootWhy = null;
+  // follow a knock-on chain to the node that actually has the problem
+  const blame = (list, verb) => {
+    const ex = list.map(m => explain(m, seen)).find(Boolean);
+    root = ex?.root ?? list[0];
+    const why = rootWhy = ex ? ex.rootWhy : verb;
+    short = `Held back by ${nodeTitle(root)[0]}`;
+    lines.push(`This is a knock-on effect, not a problem here. The real cause is ${nodeTitle(root)[0]} (${why}). Fix that and this speeds up too.`);
+  };
   if (kind === 'blocked') {
     const made = r.out[item], extra = r.maxOut[item] - made, full = fullBelt(n.id, 'down', item), down = neighbours(n.id, 'down', item);
     lines.push(`It could make ${fmt(r.maxOut[item])} ${name}/min, but only ${fmt(made)}/min gets taken away.`);
-    if (full) lines.push(`The belt leaving it (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
-    else if (!down.length) lines.push(`Nothing connected after it uses ${name}.`);
-    else if (down.every(m => status(m) === 'blocked')) {
-      knock = true;
-      lines.push(`This is a knock-on effect: ${names(down)} ${down.length > 1 ? 'are' : 'is'} also making more than gets used, so ${down.length > 1 ? 'they take' : 'it takes'} less from here. Fix that first.`);
-    } else {
+    if (full) {
+      short = `Belt out is full (${full.tier.replace('Conveyor Belt ', '')})`;
+      lines.push(`The belt leaving it (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+    } else if (!down.length) { short = `Nothing uses its ${name}`; lines.push(`Nothing connected after it uses ${name}.`); }
+    else if (down.every(m => status(m) === 'blocked')) { knock = true; blame(down, 'makes more than gets used'); }
+    else {
+      short = `${names(down)} can't use more`;
       lines.push(`${names(down)} only use${down.length > 1 ? '' : 's'} ${fmt(made)}/min of it.`);
       const k = down.length === 1 ? moreOf(down[0], item, extra, 'maxIn') : 0;
       if (k) lines.push(`Fix: add ${k} more ${building(down[0], k)} after it to use the extra ${fmt(extra)}/min.`);
     }
   } else if (kind === 'starved') {
-    const got = r.in[item], short = r.maxIn[item] - got, full = fullBelt(n.id, 'up', item), up = neighbours(n.id, 'up', item);
-    lines.push(`It needs ${fmt(r.maxIn[item])} ${name}/min but only gets ${fmt(got)}/min, ${fmt(short)}/min short.`);
-    if (full) lines.push(`The belt coming in (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
-    else if (!up.length) lines.push(`Nothing feeds it ${name}. Connect a belt.`);
-    else if (up.every(m => status(m) === 'starved')) {
-      knock = true;
-      lines.push(`This is a knock-on effect: ${names(up)} ${up.length > 1 ? 'are' : 'is'} short on ${up.length > 1 ? 'their' : 'its'} own inputs, so ${up.length > 1 ? 'they make' : 'it makes'} too little. Fix that first.`);
-    } else {
+    const got = r.in[item], missing = r.maxIn[item] - got, full = fullBelt(n.id, 'up', item), up = neighbours(n.id, 'up', item);
+    lines.push(`It needs ${fmt(r.maxIn[item])} ${name}/min but only gets ${fmt(got)}/min, ${fmt(missing)}/min short.`);
+    if (full) {
+      short = `Belt in is full (${full.tier.replace('Conveyor Belt ', '')})`;
+      lines.push(`The belt coming in (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+    } else if (!up.length) { short = `No ${name} connected`; lines.push(`Nothing feeds it ${name}. Connect a belt.`); }
+    else if (up.every(m => status(m) === 'starved')) { knock = true; blame(up, 'gets too little input'); }
+    else {
+      short = `${names(up)} send${up.length > 1 ? '' : 's'} too little ${name}`;
       lines.push(`${names(up)} only suppl${up.length > 1 ? 'y' : 'ies'} ${fmt(got)}/min.`);
-      const k = up.length === 1 ? moreOf(up[0], item, short, 'maxOut') : 0;
-      if (k) lines.push(`Fix: add ${k} more ${building(up[0], k)} before it to cover the missing ${fmt(short)}/min.`);
+      const k = up.length === 1 ? moreOf(up[0], item, missing, 'maxOut') : 0;
+      if (k) lines.push(`Fix: add ${k} more ${building(up[0], k)} before it to cover the missing ${fmt(missing)}/min.`);
     }
   }
   if (!knock && ['machine', 'extractor'].includes(n.type)) {
@@ -141,7 +153,7 @@ function explain(n) {
     if (need < n.count) lines.push(`Or build less here: ${need} ${building(n, need)} would do the same job. Or keep all ${n.count} and underclock them to ${fmt(n.clock * r.util)}%.`);
     else if (n.count === 1) lines.push(`Or underclock it to ${fmt(n.clock * r.util)}% to save power.`);
   }
-  return { lines, knock };
+  return { lines, knock, short, root, rootWhy: rootWhy ?? short };
 }
 
 function nodeTitle(n) {
@@ -164,7 +176,7 @@ function nodeHTML(n) {
   let body = '';
   if (r && !JUNCTIONS.includes(n.type) && n.type !== 'sink' && r.why !== 'unconfigured')
     body += `<div class="u">${pct(r.util)}</div>`;
-  if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(reasonText(r.why))}</div>`;
+  if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(explain(n)?.short ?? reasonText(r.why))}</div>`;
   if (r) {
     for (const i in r.maxIn) body += `<div class="r">▸ ${esc(itemName(i))} ${fmt(r.in[i])}/${fmt(r.maxIn[i])}</div>`;
     for (const i in r.maxOut) body += `<div class="r">◂ ${esc(itemName(i))} ${fmt(r.out[i])}/${fmt(r.maxOut[i])}${i in r.unconnected ? ' → storage' : ''}</div>`;
