@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Flow Planner</title>
+<style>
+  :root {
+    --bg: #16181c; --panel: #1f2228; --line: #33373f; --text: #e6e6e6; --muted: #8b919c;
+    --accent: #f39c32; --ok: #3fb950; --warn: #d6a21e; --bad: #e5534b; --idle: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  header { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0 10px 0 0; color: var(--accent); }
+  header .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+  button, select, input { font: inherit; color: var(--text); background: #2a2e36; border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  label.inline { display: flex; gap: 4px; align-items: center; color: var(--muted); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #viewport { flex: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none;
+    background-image: radial-gradient(#2c3038 1px, transparent 1px); background-size: 24px 24px; }
+  #viewport.panning { cursor: grabbing; }
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+  #wires path.hit { stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; }
+  #wires path.wire { fill: none; stroke: #5a6270; stroke-width: 2.5; pointer-events: none; }
+  #wires path.wire.flow { stroke: #8fa3bf; }
+  #wires path.wire.full { stroke: var(--bad); stroke-width: 4; }
+  #wires path.wire.none { stroke-dasharray: 5 5; }
+  #wires path.wire.sel { stroke: var(--accent); }
+  #wires path.temp { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; }
+  #wires text { font-size: 11px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; pointer-events: none; }
+  #wires text.full { fill: #ff8a84; }
+  .node { position: absolute; min-width: 160px; max-width: 240px; background: var(--panel); border: 2px solid var(--line);
+    border-left-width: 6px; border-radius: 6px; padding: 5px 8px; cursor: move; user-select: none; }
+  .node.sel { box-shadow: 0 0 0 2px var(--accent); }
+  .node.ok { border-left-color: var(--ok); } .node.starved { border-left-color: var(--warn); }
+  .node.blocked { border-left-color: var(--bad); } .node.idle { border-left-color: var(--idle); }
+  .node.junction { min-width: 90px; border-radius: 16px; text-align: center; }
+  .node .t { font-weight: 600; } .node .s { color: var(--muted); font-size: 12px; }
+  .node .u { font-weight: 600; } .node.ok .u { color: var(--ok); } .node.starved .u { color: var(--warn); } .node.blocked .u { color: var(--bad); }
+  .node .r { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .port { position: absolute; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: #444b57; border: 2px solid var(--bg); }
+  .port.in { left: -11px; } .port.out { right: -9px; cursor: crosshair; } .port.out:hover { background: var(--accent); }
+  aside { width: 320px; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 10px 12px; }
+  aside h2 { font-size: 14px; margin: 4px 0 8px; } aside h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+  aside .f { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; color: var(--muted); }
+  aside .f input, aside .f select { width: 100%; }
+  aside table { width: 100%; border-collapse: collapse; } aside td { padding: 2px 0; } aside td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  aside .issue { padding: 5px 7px; border-radius: 4px; background: #262a31; margin-bottom: 4px; cursor: pointer; border-left: 3px solid var(--warn); }
+  aside .issue.bad { border-left-color: var(--bad); } aside .issue:hover { background: #2d323b; }
+  aside .muted, .muted { color: var(--muted); }
+  aside .row { display: flex; gap: 6px; margin-top: 10px; }
+  .hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }
+  @media (max-width: 700px) { main { flex-direction: column; } aside { width: auto; height: 40vh; border-left: 0; border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factory Flow Planner</h1>
+  <button data-add="extractor">+ Miner / Extractor</button>
+  <button data-add="machine">+ Machine</button>
+  <button data-add="splitter">+ Splitter</button>
+  <button data-add="merger">+ Merger</button>
+  <button data-add="input">+ Input</button>
+  <button data-add="sink">+ Sink / Output</button>
+  <span class="sep"></span>
+  <label class="inline">New belts <select id="defBelt"></select></label>
+  <label class="inline">pipes <select id="defPipe"></select></label>
+  <span class="sep"></span>
+  <button id="exportBtn">Export</button>
+  <button id="importBtn">Import</button>
+  <input id="importFile" type="file" accept=".json,application/json" hidden>
+  <button id="shareBtn">Copy share link</button>
+  <button id="clearBtn" class="danger">Clear</button>
+</header>
+<main>
+  <div id="viewport">
+    <div id="world"><svg id="wires"></svg></div>
+    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Del removes selection</div>
+  </div>
+  <aside><div id="form"></div><div id="results"></div></aside>
+</main>
+<script src="sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
