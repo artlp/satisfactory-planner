@@ -92,6 +92,12 @@ function neighbours(id, dir, item, seen = new Set([id])) {
   return out;
 }
 const fullBelt = (id, dir, item) => G.edges.find(e => (dir === 'down' ? e.from : e.to) === id && (!e.item || e.item === item) && RES.edges[e.id]?.util >= 0.995);
+// A full belt only matters if something waits on it: a backed-up node before it or a short node after it.
+function beltLimits(e) {
+  const r = RES.edges[e.id], items = Object.keys(r?.flow ?? {});
+  const ends = (id, dir) => JUNCTIONS.includes(nodeById(id)?.type) ? items.flatMap(i => neighbours(id, dir, i)) : [nodeById(id)].filter(Boolean);
+  return ends(e.from, 'up').some(m => status(m) === 'blocked') || ends(e.to, 'down').some(m => status(m) === 'starved');
+}
 const names = list => list.map(m => nodeTitle(m)[0]).join(', ');
 const building = (n, k) => {
   const b = n.type === 'machine' ? DATA.buildings[recipe(n.recipe)?.building] ?? 'machine' : extractor(n.extractor)?.name ?? 'building';
@@ -211,13 +217,14 @@ function renderWires(temp) {
   for (const e of G.edges) {
     if (!nodeById(e.from) || !nodeById(e.to)) continue;
     const a = portPos(e.from, 'out'), b = portPos(e.to, 'in'), d = curve(a, b), r = RES.edges[e.id];
-    const full = r && r.util >= 0.995, cls = `wire ${full ? 'full' : r?.total > 0 ? 'flow' : 'none'} ${sel?.edge === e.id ? 'sel' : ''}`;
+    const full = r && r.util >= 0.995, state = full ? (beltLimits(e) ? 'full' : 'maxed') : r?.total > 0 ? 'flow' : 'none';
+    const cls = `wire ${state} ${sel?.edge === e.id ? 'sel' : ''}`;
     const items = r ? Object.keys(r.flow).filter(i => r.flow[i] > 0.01) : [];
     const what = e.item ? itemName(e.item) : items.length === 1 ? itemName(items[0]) : items.length ? `${items.length} items` : '';
     const free = r ? r.cap - r.total : 0;
     const label = r ? `${what} ${fmt(r.total)}/${fmt(r.cap)}${!full && free > 0.05 ? ` · ${fmt(free)} free` : ''}` : '';
     svg += `<path class="hit" data-edge="${e.id}" d="${d}"/><path class="${cls}" d="${d}"/>` +
-      `<text class="${full ? 'full' : ''}" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle">${esc(label)}</text>`;
+      `<text class="${full ? state : ''}" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle">${esc(label)}</text>`;
   }
   if (temp) svg += `<path class="temp" d="${curve(temp.a, temp.b)}"/>`;
   wires.innerHTML = svg;
@@ -468,8 +475,8 @@ function renderResults() {
     const issues = [];
     for (const e of G.edges) {
       const r = RES.edges[e.id];
-      if (r && r.util >= 0.995) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(e.tier)})` +
-        `<p class="ex">This belt can't carry more. If something next to it isn't at 100%, upgrade the belt or add a second one.</p>` });
+      if (r && r.util >= 0.995 && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(e.tier)})` +
+        `<p class="ex">This belt is full and something next to it is waiting on it. Upgrade the belt or add a second one.</p>` });
     }
     const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < 0.995)
       .map(n => ({ n, r: RES.nodes[n.id], ex: explain(n) }))
@@ -487,7 +494,7 @@ function renderResults() {
       (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
       `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
       `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
-      `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
+      `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full and slowing something down. Yellow belts are exactly full with nothing waiting: perfect, but no room to grow. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
     el.querySelectorAll('.issue').forEach(d => d.addEventListener('click', () => {
       const x = issues[d.dataset.k]; focusNode(x.node); if (x.edge) select({ edge: x.edge });
     }));
