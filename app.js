@@ -72,9 +72,76 @@ function status(n) {
 function reasonText(why) {
   if (!why) return '';
   const [k, i] = why.split(':');
-  if (k === 'starved') return `Starved of ${itemName(i)}`;
-  if (k === 'blocked') return `Output backed up: ${itemName(i)}`;
+  if (k === 'starved') return `Not enough ${itemName(i)} coming in`;
+  if (k === 'blocked') return `Makes more ${itemName(i)} than gets used`;
   return 'Not configured';
+}
+
+// Nodes that feed (dir 'up') or take (dir 'down') `item` from node `id`, looking through splitters/mergers.
+function neighbours(id, dir, item, seen = new Set([id])) {
+  const out = [];
+  for (const e of G.edges) {
+    const [here, there] = dir === 'down' ? [e.from, e.to] : [e.to, e.from];
+    if (here !== id || (e.item && e.item !== item) || seen.has(there)) continue;
+    seen.add(there);
+    const m = nodeById(there);
+    if (!m) continue;
+    if (JUNCTIONS.includes(m.type)) out.push(...neighbours(there, dir, item, seen));
+    else if (dir === 'up' || m.type === 'sink' || RES.nodes[m.id]?.maxIn[item]) out.push(m);
+  }
+  return out;
+}
+const fullBelt = (id, dir, item) => G.edges.find(e => (dir === 'down' ? e.from : e.to) === id && (!e.item || e.item === item) && RES.edges[e.id]?.util >= 0.995);
+const names = list => list.map(m => nodeTitle(m)[0]).join(', ');
+const building = (n, k) => {
+  const b = n.type === 'machine' ? DATA.buildings[recipe(n.recipe)?.building] ?? 'machine' : extractor(n.extractor)?.name ?? 'building';
+  return k > 1 ? b.replace(/y$/, 'ie') + 's' : b;
+};
+// How many more of node m it takes to move `amount` more of `item` per minute.
+const moreOf = (m, item, amount, side) => {
+  const per = (RES.nodes[m.id]?.[side][item] ?? 0) / (m.count || 1);
+  return per > 0 && ['machine', 'extractor'].includes(m.type) ? Math.ceil(amount / per - 1e-6) : 0;
+};
+
+// Plain-English "why is this not at 100% and what do I do about it". knock = caused by something else.
+function explain(n) {
+  const r = RES.nodes[n.id];
+  if (!r || r.util === null || r.util >= 0.995 || !r.why || r.why === 'unconfigured') return null;
+  const [kind, item] = r.why.split(':'), name = itemName(item), lines = [];
+  let knock = false;
+  if (kind === 'blocked') {
+    const made = r.out[item], extra = r.maxOut[item] - made, full = fullBelt(n.id, 'down', item), down = neighbours(n.id, 'down', item);
+    lines.push(`It could make ${fmt(r.maxOut[item])} ${name}/min, but only ${fmt(made)}/min gets taken away.`);
+    if (full) lines.push(`The belt leaving it (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+    else if (!down.length) lines.push(`Nothing connected after it uses ${name}.`);
+    else if (down.every(m => status(m) === 'blocked')) {
+      knock = true;
+      lines.push(`This is a knock-on effect: ${names(down)} ${down.length > 1 ? 'are' : 'is'} also making more than gets used, so ${down.length > 1 ? 'they take' : 'it takes'} less from here. Fix that first.`);
+    } else {
+      lines.push(`${names(down)} only use${down.length > 1 ? '' : 's'} ${fmt(made)}/min of it.`);
+      const k = down.length === 1 ? moreOf(down[0], item, extra, 'maxIn') : 0;
+      if (k) lines.push(`Fix: add ${k} more ${building(down[0], k)} after it to use the extra ${fmt(extra)}/min.`);
+    }
+  } else if (kind === 'starved') {
+    const got = r.in[item], short = r.maxIn[item] - got, full = fullBelt(n.id, 'up', item), up = neighbours(n.id, 'up', item);
+    lines.push(`It needs ${fmt(r.maxIn[item])} ${name}/min but only gets ${fmt(got)}/min, ${fmt(short)}/min short.`);
+    if (full) lines.push(`The belt coming in (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+    else if (!up.length) lines.push(`Nothing feeds it ${name}. Connect a belt.`);
+    else if (up.every(m => status(m) === 'starved')) {
+      knock = true;
+      lines.push(`This is a knock-on effect: ${names(up)} ${up.length > 1 ? 'are' : 'is'} short on ${up.length > 1 ? 'their' : 'its'} own inputs, so ${up.length > 1 ? 'they make' : 'it makes'} too little. Fix that first.`);
+    } else {
+      lines.push(`${names(up)} only suppl${up.length > 1 ? 'y' : 'ies'} ${fmt(got)}/min.`);
+      const k = up.length === 1 ? moreOf(up[0], item, short, 'maxOut') : 0;
+      if (k) lines.push(`Fix: add ${k} more ${building(up[0], k)} before it to cover the missing ${fmt(short)}/min.`);
+    }
+  }
+  if (!knock && ['machine', 'extractor'].includes(n.type)) {
+    const need = Math.ceil(n.count * r.util - 1e-6);
+    if (need < n.count) lines.push(`Or build less here: ${need} ${building(n, need)} would do the same job. Or keep all ${n.count} and underclock them to ${fmt(n.clock * r.util)}%.`);
+    else if (n.count === 1) lines.push(`Or underclock it to ${fmt(n.clock * r.util)}% to save power.`);
+  }
+  return { lines, knock };
 }
 
 function nodeTitle(n) {
@@ -374,7 +441,9 @@ function renderResults() {
     const n = nodeById(sel.node), r = RES.nodes[sel.node];
     if (!r) return el.innerHTML = '';
     let h = '';
-    if (r.util !== null && n.type !== 'sink') h += `<h3>Running at ${pct(r.util)}</h3>${r.util < 0.995 ? `<div>${esc(reasonText(r.why))}</div>` : ''}`;
+    const ex = explain(n);
+    if (r.util !== null && n.type !== 'sink') h += `<h3>Running at ${pct(r.util)}</h3>` +
+      (ex ? `<div><b>${esc(reasonText(r.why))}</b></div>${ex.lines.map(l => `<p class="ex">${esc(l)}</p>`).join('')}` : '');
     if (Object.keys(r.maxIn).length) h += `<h3>Consumes /min</h3>` + rateTable(Object.keys(r.maxIn).map(i => [esc(itemName(i)), `${fmt(r.in[i])} / ${fmt(r.maxIn[i])}`]));
     if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)) + (i in r.unconnected ? ' <span class="muted">(not connected, counted as storage)</span>' : ''), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
     if (n.type === 'sink' || JUNCTIONS.includes(n.type)) h += `<h3>Throughput /min</h3>` + rateTable(Object.entries(r.in).map(([i, v]) => [esc(itemName(i)), fmt(v)]));
@@ -387,13 +456,15 @@ function renderResults() {
     const issues = [];
     for (const e of G.edges) {
       const r = RES.edges[e.id];
-      if (r && r.util >= 0.995) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt maxed</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(e.tier)})` });
+      if (r && r.util >= 0.995) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(e.tier)})` +
+        `<p class="ex">This belt can't carry more. If something next to it isn't at 100%, upgrade the belt or add a second one.</p>` });
     }
     const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < 0.995)
-      .sort((a, b) => RES.nodes[a.id].util - RES.nodes[b.id].util);
-    for (const n of under) {
-      const r = RES.nodes[n.id];
-      issues.push({ bad: r.why?.startsWith('blocked'), node: n.id, txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])} — ${esc(reasonText(r.why))}` });
+      .map(n => ({ n, r: RES.nodes[n.id], ex: explain(n) }))
+      .sort((a, b) => (a.ex?.knock ?? 0) - (b.ex?.knock ?? 0) || a.r.util - b.r.util); // real causes first, knock-on effects last
+    for (const { n, r, ex } of under) {
+      issues.push({ bad: r.why?.startsWith('blocked'), knock: ex?.knock, node: n.id,
+        txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])}: ${esc(reasonText(r.why))}` + (ex?.lines ?? []).map(l => `<p class="ex">${esc(l)}</p>`).join('') });
     }
     const sinks = {};
     for (const n of G.nodes) {
@@ -401,10 +472,10 @@ function renderResults() {
       for (const [i, v] of Object.entries((n.type === 'sink' ? r?.in : r?.unconnected) ?? {})) sinks[i] = (sinks[i] || 0) + v;
     }
     el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
-      (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
+      (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
       `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
       `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
-      `<h3>How to read it</h3><div class="muted">Green = 100%. Yellow = starved for input. Red = output backed up (its belt is full or what it feeds can't take more). Red belts are at capacity. Rates are actual / max per minute.</div>`;
+      `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
     el.querySelectorAll('.issue').forEach(d => d.addEventListener('click', () => {
       const x = issues[d.dataset.k]; focusNode(x.node); if (x.edge) select({ edge: x.edge });
     }));
