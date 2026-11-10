@@ -161,9 +161,11 @@ viewport.addEventListener('pointerdown', ev => {
   else { drag = { mode: 'pan', sx: ev.clientX - view.x, sy: ev.clientY - view.y, moved: false }; viewport.classList.add('panning'); }
 });
 
+let mouse = null, clip = null; // last pointer position in world coords (paste target), copied node
+viewport.addEventListener('pointerleave', () => { mouse = null; });
 viewport.addEventListener('pointermove', ev => {
+  const p = mouse = toWorld(ev.clientX, ev.clientY);
   if (!drag) return;
-  const p = toWorld(ev.clientX, ev.clientY);
   if (drag.mode === 'pan') { view.x = ev.clientX - drag.sx; view.y = ev.clientY - drag.sy; drag.moved = true; applyView(); }
   else if (drag.mode === 'node') {
     drag.n.x = Math.round(p.x - drag.dx); drag.n.y = Math.round(p.y - drag.dy); drag.moved = true;
@@ -198,7 +200,20 @@ document.addEventListener('keydown', ev => {
   if (ev.target.closest('input, select, textarea')) return;
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel) { ev.preventDefault(); removeSelected(); }
   if (ev.key === 'Escape') select(null);
+  const mod = ev.ctrlKey || ev.metaKey, key = ev.key.toLowerCase();
+  if (mod && key === 'c' && sel?.node) clip = { ...nodeById(sel.node) };
+  if (mod && key === 'v' && clip) {
+    ev.preventDefault();
+    // paste under the cursor, or offset from the original when the cursor is off the board
+    if (mouse) cloneNode(clip, mouse.x - 20, mouse.y - 20);
+    else { clip.x += 30; clip.y += 30; cloneNode(clip, clip.x, clip.y); }
+  }
 });
+
+function cloneNode(src, x, y) {
+  const n = { ...src, id: uid(), x: Math.round(x), y: Math.round(y) };
+  G.nodes.push(n); select({ node: n.id }); renderCanvas(); changed();
+}
 
 function connect(from, to) {
   const src = nodeById(from);
@@ -305,10 +320,7 @@ function renderForm() {
     renderCanvas(); renderForm(); changed();
   }));
   $('#delBtn')?.addEventListener('click', removeSelected);
-  $('#dupBtn')?.addEventListener('click', () => {
-    const n = { ...nodeById(sel.node), id: uid() }; n.x += 30; n.y += 30;
-    G.nodes.push(n); select({ node: n.id }); changed();
-  });
+  $('#dupBtn')?.addEventListener('click', () => { const n = nodeById(sel.node); cloneNode(n, n.x + 30, n.y + 30); });
 }
 
 function rateTable(rows) {
