@@ -98,6 +98,8 @@ function beltLimits(e) {
   const ends = (id, dir) => JUNCTIONS.includes(nodeById(id)?.type) ? items.flatMap(i => neighbours(id, dir, i)) : [nodeById(id)].filter(Boolean);
   return ends(e.from, 'up').some(m => status(m) === 'blocked') || ends(e.to, 'down').some(m => status(m) === 'starved');
 }
+const beltName = e => e.measured ? `${e.tier}, measured ${fmt(e.measured)}/min` : e.tier;
+const beltFix = e => e.measured ? 'That is your measured rate, so check in game what holds that belt back.' : 'Upgrade it or add a second belt.';
 const names = list => list.map(m => nodeTitle(m)[0]).join(', ');
 const building = (n, k) => {
   const b = n.type === 'machine' ? DATA.buildings[recipe(n.recipe)?.building] ?? 'machine' : extractor(n.extractor)?.name ?? 'building';
@@ -129,8 +131,8 @@ function explain(n, seen = new Set()) {
     const made = r.out[item], extra = r.maxOut[item] - made, full = fullBelt(n.id, 'down', item), down = neighbours(n.id, 'down', item);
     lines.push(`It could make ${fmt(r.maxOut[item])} ${name}/min, but only ${fmt(made)}/min gets taken away.`);
     if (full) {
-      short = `Belt out is full (${full.tier.replace('Conveyor Belt ', '')})`;
-      lines.push(`The belt leaving it (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+      short = `Belt out is full (${beltName(full).replace('Conveyor Belt ', '')})`;
+      lines.push(`The belt leaving it (${beltName(full)}) is full at ${fmt(RES.edges[full.id].cap)}/min. ${beltFix(full)}`);
     } else if (!down.length) { short = `Nothing uses its ${name}`; lines.push(`Nothing connected after it uses ${name}.`); }
     else if (down.every(m => status(m) === 'blocked')) { knock = true; blame(down, 'makes more than gets used'); }
     else {
@@ -143,8 +145,8 @@ function explain(n, seen = new Set()) {
     const got = r.in[item], missing = r.maxIn[item] - got, full = fullBelt(n.id, 'up', item), up = neighbours(n.id, 'up', item);
     lines.push(`It needs ${fmt(r.maxIn[item])} ${name}/min but only gets ${fmt(got)}/min, ${fmt(missing)}/min short.`);
     if (full) {
-      short = `Belt in is full (${full.tier.replace('Conveyor Belt ', '')})`;
-      lines.push(`The belt coming in (${full.tier}) is full at ${fmt(RES.edges[full.id].cap)}/min. Upgrade it or add a second belt.`);
+      short = `Belt in is full (${beltName(full).replace('Conveyor Belt ', '')})`;
+      lines.push(`The belt coming in (${beltName(full)}) is full at ${fmt(RES.edges[full.id].cap)}/min. ${beltFix(full)}`);
     } else if (!up.length) { short = `No ${name} connected`; lines.push(`Nothing feeds it ${name}. Connect a belt.`); }
     else if (up.every(m => status(m) === 'starved')) { knock = true; blame(up, 'gets too little input'); }
     else {
@@ -222,7 +224,7 @@ function renderWires(temp) {
     const items = r ? Object.keys(r.flow).filter(i => r.flow[i] > 0.01) : [];
     const what = e.item ? itemName(e.item) : items.length === 1 ? itemName(items[0]) : items.length ? `${items.length} items` : '';
     const free = r ? r.cap - r.total : 0;
-    const label = r ? `${what} ${fmt(r.total)}/${fmt(r.cap)}${!full && free > 0.05 ? ` · ${fmt(free)} free` : ''}` : '';
+    const label = r ? `${what} ${fmt(r.total)}/${fmt(r.cap)}${e.measured ? ' measured' : !full && free > 0.05 ? ` · ${fmt(free)} free` : ''}` : '';
     svg += `<path class="hit" data-edge="${e.id}" d="${d}"/><path class="${cls}" d="${d}"/>` +
       `<text class="${full ? state : ''}" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle">${esc(label)}</text>`;
   }
@@ -424,6 +426,8 @@ function renderForm() {
     const outs = src.type === 'machine' ? recipe(src.recipe)?.out.map(o => [o[0], itemName(o[0])]) ?? [] : allItems();
     f.innerHTML = `<h2>${esc(nodeTitle(src)[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}</h2>` +
       field('Belt / pipe', `<select data-k="tier">${options(tiers().map(t => [t.name, `${t.name} (${t.rate}/min)`]), e.tier)}</select>`) +
+      field('Measured in game /min', `<input data-k="measured" type="number" min="0" step="any" value="${e.measured ?? ''}" placeholder="empty = use belt speed">`) +
+      `<div class="muted" style="margin:-4px 0 8px">Type what your throughput monitor shows. The planner then treats this belt as only carrying that much.</div>` +
       field(src.type === 'machine' ? 'Output port carries' : 'Only carry (smart splitter filter)',
         `<select data-k="item"><option value="">Any</option>${options(outs, e.item)}</select>`) +
       `<div class="row"><button class="danger" id="delBtn">Delete</button></div>`;
@@ -441,6 +445,7 @@ function renderForm() {
       if (k === 'clock') v = Math.min(250, Math.max(1, v || 100));
       if (k === 'count') v = Math.max(1, Math.round(v) || 1);
       if (k === 'rate') v = Math.max(0, v || 0);
+      if (k === 'measured') v = v > 0 ? v : null;
     } else if (v === '') v = k === 'label' ? '' : null;
     obj[k] = v;
     if (k === 'extractor' && !extractor(v).allowed.includes(obj.item)) obj.item = extractor(v).allowed[0];
@@ -475,7 +480,7 @@ function renderResults() {
     const issues = [];
     for (const e of G.edges) {
       const r = RES.edges[e.id];
-      if (r && r.util >= 0.995 && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(e.tier)})` +
+      if (r && r.util >= 0.995 && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(beltName(e))})` +
         `<p class="ex">This belt is full and something next to it is waiting on it. Upgrade the belt or add a second one.</p>` });
     }
     const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < 0.995)

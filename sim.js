@@ -28,7 +28,8 @@
       }
     }
     const edges = graph.edges.filter(e => S[e.from] && S[e.to] && e.from !== e.to).map(e => ({
-      e, cap: tiers[e.tier] ?? 1e9, flow: {}, sent: 0,
+      // a rate measured in game caps the belt below its tier speed
+      e, cap: Math.min(tiers[e.tier] ?? 1e9, e.measured > 0 ? e.measured / 60 : Infinity), flow: {}, sent: 0,
     }));
     for (const E of edges) { outEdges[E.e.from].push(E); inEdges[E.e.to].push(E); }
     // An output with no belt that could carry it is treated as going to storage, not as blocked.
@@ -103,14 +104,21 @@
         const list = outEdges[s.n.id];
         if (!list.length || s.kind === 'sink') continue;
         const pool = s.cap ? s.in : s.out, total = sum(pool);
-        if (total <= 0) continue;
-        const room = new Map(list.map(E => [E, E.cap]));
-        for (const item of Object.keys(pool)) {
-          // each item gets a proportional slice of each belt, so a blocked item clogs a mixed belt
-          const slice = new Map(list.map(E => [E, E.cap * pool[item] / total]));
-          pool[item] -= push(item, pool[item], list, s.cap ? slice : room, measuring);
+        // a belt may use what it left unused last tick (at most one tick's worth), so ticks where
+        // the source happened to be empty don't permanently lose capacity
+        const room = new Map(list.map(E => [E, E.cap + (E.bank ?? E.cap)]));
+        const start = new Map(room);
+        for (const item of total > 0 ? Object.keys(pool) : []) {
+          let moved;
+          if (s.cap) { // each item gets a proportional slice of each belt, so a blocked item clogs a mixed belt
+            const slice = new Map(list.map(E => [E, start.get(E) * pool[item] / total])), before = new Map(slice);
+            moved = push(item, pool[item], list, slice, measuring);
+            for (const E of list) room.set(E, room.get(E) - (before.get(E) - slice.get(E)));
+          } else moved = push(item, pool[item], list, room, measuring);
+          pool[item] -= moved;
           if (pool[item] < 1e-9) delete pool[item];
         }
+        for (const E of list) E.bank = Math.min(E.cap, room.get(E));
       }
     }
 

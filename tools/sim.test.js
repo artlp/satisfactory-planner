@@ -59,4 +59,17 @@ r = simulate({ nodes: [miner('a'), { id: 'mg', type: 'merger' }, { id: 'sp', typ
   edges: [e('a', 'mg'), e('mg', 'sp', 'Conveyor Belt Mk.2'), e('sp', 'mg'), e('sp', 'k')] }, data);
 near(r.nodes.k.in.Desc_OreIron_C, 60, 'loop delivers everything');
 
+// 7. measured rate caps a belt: 120 ore on a Mk3 belt measured at 30 -> smelter gets 30
+r = simulate({ nodes: [miner('a', 'Build_MinerMk2_C'), m('s', 'Recipe_IngotIron_C', 4)],
+  edges: [{ ...e('a', 's', 'Conveyor Belt Mk.3'), measured: 30 }] }, data);
+near(r.edges['a>s'].total, 30, 'measured belt carries 30');
+near(r.nodes.s.util, 0.25, 'smelters see the measured rate');
+
+// 8. user's case: splitter with a sink on one side and a measured 30/min belt on the other
+r = simulate({ nodes: [{ id: 'w', type: 'input', item: 'Desc_Wire_C', rate: 180 }, { id: 'sp', type: 'splitter' }, m('c', 'Recipe_Cable_C', 6), { id: 'k', type: 'sink' }],
+  edges: [e('w', 'sp', 'Conveyor Belt Mk.3'), { ...e('sp', 'c', 'Conveyor Belt Mk.3'), measured: 30 }, e('sp', 'k', 'Conveyor Belt Mk.3')] }, data);
+near(r.edges['sp>c'].total, 30, 'limited splitter branch gets its full 30');
+near(r.edges['sp>k'].total, 150, 'overflow goes to the sink');
+for (const [id, E] of Object.entries(r.edges)) assert(E.total <= E.cap + 1e-6, `${id} over capacity`);
+
 console.log('all sim tests passed');
