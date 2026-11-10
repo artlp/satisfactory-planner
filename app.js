@@ -81,12 +81,12 @@ function nodeTitle(n) {
   if (n.type === 'machine') {
     const r = recipe(n.recipe);
     const clock = n.clock !== 100 ? ` @${n.clock}%` : '';
-    return [n.label || (r ? DATA.buildings[r.building] : 'Machine') + ` ×${n.count}${clock}`, r ? r.name : 'pick a recipe'];
+    return [(n.label || (r ? DATA.buildings[r.building] : 'Machine')) + ` ×${n.count}${clock}`, r ? r.name : 'pick a recipe'];
   }
   if (n.type === 'extractor') {
     const e = extractor(n.extractor);
     const clock = n.clock !== 100 ? ` @${n.clock}%` : '';
-    return [n.label || `${e?.name ?? 'Extractor'} ×${n.count}${clock}`, `${itemName(n.item)} (${PURITY[n.purity] ?? n.purity})`];
+    return [`${n.label || e?.name || 'Extractor'} ×${n.count}${clock}`, `${itemName(n.item)} (${PURITY[n.purity] ?? n.purity})`];
   }
   if (n.type === 'input') return [n.label || 'Input', `${itemName(n.item) || 'pick an item'} · ${fmt(n.rate)}/min`];
   return [n.label || { splitter: 'Splitter', merger: 'Merger', sink: 'Sink / Output' }[n.type], ''];
@@ -100,7 +100,7 @@ function nodeHTML(n) {
   if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(reasonText(r.why))}</div>`;
   if (r) {
     for (const i in r.maxIn) body += `<div class="r">▸ ${esc(itemName(i))} ${fmt(r.in[i])}/${fmt(r.maxIn[i])}</div>`;
-    for (const i in r.maxOut) body += `<div class="r">◂ ${esc(itemName(i))} ${fmt(r.out[i])}/${fmt(r.maxOut[i])}</div>`;
+    for (const i in r.maxOut) body += `<div class="r">◂ ${esc(itemName(i))} ${fmt(r.out[i])}/${fmt(r.maxOut[i])}${i in r.unconnected ? ' → storage' : ''}</div>`;
     if (n.type === 'sink' || JUNCTIONS.includes(n.type))
       for (const i in r.in) body += `<div class="r">${esc(itemName(i))} ${fmt(r.in[i])}/min</div>`;
   }
@@ -135,7 +135,8 @@ function renderWires(temp) {
     const full = r && r.util >= 0.995, cls = `wire ${full ? 'full' : r?.total > 0 ? 'flow' : 'none'} ${sel?.edge === e.id ? 'sel' : ''}`;
     const items = r ? Object.keys(r.flow).filter(i => r.flow[i] > 0.01) : [];
     const what = e.item ? itemName(e.item) : items.length === 1 ? itemName(items[0]) : items.length ? `${items.length} items` : '';
-    const label = r ? `${what} ${fmt(r.total)}/${fmt(r.cap)}` : '';
+    const free = r ? r.cap - r.total : 0;
+    const label = r ? `${what} ${fmt(r.total)}/${fmt(r.cap)}${!full && free > 0.05 ? ` · ${fmt(free)} free` : ''}` : '';
     svg += `<path class="hit" data-edge="${e.id}" d="${d}"/><path class="${cls}" d="${d}"/>` +
       `<text class="${full ? 'full' : ''}" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle">${esc(label)}</text>`;
   }
@@ -322,7 +323,7 @@ function renderResults() {
     let h = '';
     if (r.util !== null && n.type !== 'sink') h += `<h3>Running at ${pct(r.util)}</h3>${r.util < 0.995 ? `<div>${esc(reasonText(r.why))}</div>` : ''}`;
     if (Object.keys(r.maxIn).length) h += `<h3>Consumes /min</h3>` + rateTable(Object.keys(r.maxIn).map(i => [esc(itemName(i)), `${fmt(r.in[i])} / ${fmt(r.maxIn[i])}`]));
-    if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
+    if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)) + (i in r.unconnected ? ' <span class="muted">(not connected, counted as storage)</span>' : ''), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
     if (n.type === 'sink' || JUNCTIONS.includes(n.type)) h += `<h3>Throughput /min</h3>` + rateTable(Object.entries(r.in).map(([i, v]) => [esc(itemName(i)), fmt(v)]));
     el.innerHTML = h;
   } else if (sel?.edge) {
@@ -342,11 +343,15 @@ function renderResults() {
       issues.push({ bad: r.why?.startsWith('blocked'), node: n.id, txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])} — ${esc(reasonText(r.why))}` });
     }
     const sinks = {};
-    for (const n of G.nodes.filter(n => n.type === 'sink')) for (const [i, v] of Object.entries(RES.nodes[n.id]?.in ?? {})) sinks[i] = (sinks[i] || 0) + v;
+    for (const n of G.nodes) {
+      const r = RES.nodes[n.id];
+      for (const [i, v] of Object.entries((n.type === 'sink' ? r?.in : r?.unconnected) ?? {})) sinks[i] = (sinks[i] || 0) + v;
+    }
     el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
       (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
-      `<h3>Factory output /min (into sinks)</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
-      `<h3>How to read it</h3><div class="muted">Green = 100%. Yellow = starved for input. Red = output backed up (belt full, nothing taking it, or an unconnected byproduct). Red belts are at capacity. Rates are actual / max per minute.</div>`;
+      `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
+      `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
+      `<h3>How to read it</h3><div class="muted">Green = 100%. Yellow = starved for input. Red = output backed up (its belt is full or what it feeds can't take more). Red belts are at capacity. Rates are actual / max per minute.</div>`;
     el.querySelectorAll('.issue').forEach(d => d.addEventListener('click', () => {
       const x = issues[d.dataset.k]; focusNode(x.node); if (x.edge) select({ edge: x.edge });
     }));

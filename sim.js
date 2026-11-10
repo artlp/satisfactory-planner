@@ -31,6 +31,11 @@
       e, cap: tiers[e.tier] ?? 1e9, flow: {}, sent: 0,
     }));
     for (const E of edges) { outEdges[E.e.from].push(E); inEdges[E.e.to].push(E); }
+    // An output with no belt that could carry it is treated as going to storage, not as blocked.
+    for (const s of Object.values(S)) {
+      s.free = Object.keys(s.make).filter(i => !outEdges[s.n.id].some(E => !E.e.item || E.e.item === i));
+      s.dump = {};
+    }
     for (const s of Object.values(S)) {
       if (s.kind === 'splitter' || s.kind === 'merger')
         s.cap = Math.max(1, inEdges[s.n.id].reduce((a, E) => a + Math.min(E.cap, 1e4), 0)) * 2;
@@ -87,6 +92,7 @@
         if (!Object.keys(s.make).length) { p = 0; why = 'unconfigured'; }
         for (const i in s.need) s.in[i] -= s.need[i] * p;
         for (const i in s.make) s.out[i] = (s.out[i] || 0) + s.make[i] * p;
+        for (const i of s.free) { if (measuring) s.dump[i] = (s.dump[i] || 0) + s.out[i]; s.out[i] = 0; }
         if (measuring) { s.p += p; if (why && p < 0.999) s.why[why] = (s.why[why] || 0) + 1; }
       }
       // 2. move items along edges. Shuffle, then reverse next tick: every pair of
@@ -113,7 +119,8 @@
     for (const s of Object.values(S)) {
       const util = s.p / MEASURE;
       const why = Object.entries(s.why).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-      const r = { util, why, in: {}, out: {}, maxIn: {}, maxOut: {} };
+      const r = { util, why, in: {}, out: {}, maxIn: {}, maxOut: {}, unconnected: {} };
+      for (const i in s.dump) r.unconnected[i] = s.dump[i] * perMin;
       for (const i in s.need) { r.maxIn[i] = s.need[i] * 60; r.in[i] = s.need[i] * 60 * util; }
       for (const i in s.make) { r.maxOut[i] = s.make[i] * 60; r.out[i] = s.make[i] * 60 * util; }
       if (s.kind === 'sink') for (const i in s.out) r.in[i] = s.out[i] * perMin;
