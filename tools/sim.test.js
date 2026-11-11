@@ -72,4 +72,10 @@ near(r.edges['sp>c'].total, 30, 'limited splitter branch gets its full 30');
 near(r.edges['sp>k'].total, 150, 'overflow goes to the sink');
 for (const [id, E] of Object.entries(r.edges)) assert(E.total <= E.cap + 1e-6, `${id} over capacity`);
 
+// 9. generators only consume: 60 fuel/min feeds 3 fuel generators (20 each), a 4th starves
+r = simulate({ nodes: [{ id: 'f', type: 'input', item: 'Desc_LiquidFuel_C', rate: 60 }, m('g', 'Power_Build_GeneratorFuel_C_Desc_LiquidFuel_C', 4)],
+  edges: [e('f', 'g', 'Pipeline Mk.1')] }, data);
+near(r.nodes.g.util, 0.75, 'generators run on what fuel arrives');
+assert(r.nodes.g.why === 'starved:Desc_LiquidFuel_C');
+
 console.log('all sim tests passed');

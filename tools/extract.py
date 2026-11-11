@@ -36,6 +36,25 @@ for r in G["FGRecipe"]:
         "alt": r["ClassName"].startswith("Recipe_Alternate"),
     })
 
+# Generators become one "recipe" per fuel: amounts are per minute (time=60), "power" is MW at 100%.
+for k in ("FGBuildableGeneratorFuel", "FGBuildableGeneratorNuclear"):
+    for g in G[k]:
+        mw = float(g["mPowerProduction"])
+        buildings[g["ClassName"]] = g["mDisplayName"]
+        for f in g["mFuel"]:
+            fuel = f["mFuelClass"]
+            if fuel not in items:
+                continue
+            energy = float(items[fuel]["mEnergyValue"]) * (1000 if is_fluid(fuel) else 1)  # MJ per item or per m3
+            per_min = mw * 60 / energy
+            ins = [[fuel, round(per_min, 4)]]
+            if f["mSupplementalResourceClass"]:
+                ins.append([f["mSupplementalResourceClass"], round(mw * 60 * float(g["mSupplementalToPowerRatio"]) / 1000, 4)])
+            outs = [[f["mByproduct"], round(per_min * int(f["mByproductAmount"]), 4)]] if f["mByproduct"] else []
+            used.update(i for i, _ in ins + outs)
+            recipes.append({"id": f"Power_{g['ClassName']}_{fuel}", "name": f"Power: {items[fuel]['mDisplayName']}",
+                            "building": g["ClassName"], "time": 60.0, "in": ins, "out": outs, "alt": False, "power": mw})
+
 extractors = []
 for k in ("FGBuildableResourceExtractor", "FGBuildableWaterPump", "FGBuildableFrackingExtractor"):
     for c in G[k]:
@@ -57,6 +76,6 @@ out = {
     "belts": [{"name": n, "rate": r} for n, r in belts],
     "pipes": [{"name": n, "rate": r, "fluid": True} for n, r in pipes],
 }
-assert len(out["recipes"]) > 100 and all(r["out"] for r in out["recipes"])
+assert len(out["recipes"]) > 100 and all(r["out"] or r.get("power") for r in out["recipes"])
 json.dump(out, open("data/recipes.json", "w", encoding="utf-8"), separators=(",", ":"))
 print(len(out["recipes"]), "recipes,", len(out["items"]), "items,", len(extractors), "extractors")

@@ -90,7 +90,7 @@
         let p = 1, why = null;
         for (const i in s.need) { const f = (s.in[i] || 0) / s.need[i]; if (f < p) { p = f; why = 'starved:' + i; } }
         for (const i in s.make) { const f = (s.make[i] * BUF - (s.out[i] || 0)) / s.make[i]; if (f < p) { p = Math.max(0, f); why = 'blocked:' + i; } }
-        if (!Object.keys(s.make).length) { p = 0; why = 'unconfigured'; }
+        if (!Object.keys(s.make).length && !Object.keys(s.need).length) { p = 0; why = 'unconfigured'; } // generators only consume
         for (const i in s.need) s.in[i] -= s.need[i] * p;
         for (const i in s.make) s.out[i] = (s.out[i] || 0) + s.make[i] * p;
         for (const i of s.free) { if (measuring) s.dump[i] = (s.dump[i] || 0) + s.out[i]; s.out[i] = 0; }

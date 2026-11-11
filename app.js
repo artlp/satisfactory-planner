@@ -13,6 +13,8 @@ const PURITY = { 0.5: 'Impure', 1: 'Normal', 2: 'Pure' };
 const JUNCTIONS = ['splitter', 'merger'];
 const nodeById = id => G.nodes.find(n => n.id === id);
 const recipeLabel = r => `${r.name} — ${DATA.buildings[r.building]}`;
+// MW a generator node makes right now (power scales linearly with clock and count)
+const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.recipe).power * n.count * n.clock / 100 * (RES.nodes[n.id]?.util ?? 0) : 0;
 
 // ---------- persistence ----------
 const save = () => { try { localStorage.setItem('ffp-graph', JSON.stringify(G)); } catch {} };
@@ -184,6 +186,7 @@ function nodeHTML(n) {
   let body = '';
   if (r && !JUNCTIONS.includes(n.type) && n.type !== 'sink' && r.why !== 'unconfigured')
     body += `<div class="u">${pct(r.util)}</div>`;
+  if (recipe(n.recipe)?.power) body += `<div class="r">⚡ ${fmt(powerMW(n))} MW</div>`;
   if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(explain(n)?.short ?? reasonText(r.why))}</div>`;
   if (r) {
     for (const i in r.maxIn) body += `<div class="r">▸ ${esc(itemName(i))} ${fmt(r.in[i])}/${fmt(r.maxIn[i])}</div>`;
@@ -406,7 +409,7 @@ function renderForm() {
       h += field('Recipe', `<input data-k="recipe" list="recipeList" value="${esc(r ? recipeLabel(r) : '')}" placeholder="type to search…">`);
       h += field('Machines', `<input data-k="count" type="number" min="1" step="1" value="${n.count}">`);
       h += field('Clock speed %', `<input data-k="clock" type="number" min="1" max="250" step="any" value="${n.clock}">`);
-      if (r) h += `<div class="muted">Per machine @100%: ${r.in.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`).join(' + ')} → ${r.out.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`).join(' + ')} /min</div>`;
+      if (r) h += `<div class="muted">Per machine @100%: ${r.in.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`).join(' + ')} → ${[...r.out.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`), r.power && `${fmt(r.power)} MW`].filter(Boolean).join(' + ')}${r.out.length ? ' /min' : ''}</div>`;
     } else if (n.type === 'extractor') {
       const ex = extractor(n.extractor);
       h += field('Building', `<select data-k="extractor">${options(DATA.extractors.map(e => [e.id, e.name]), n.extractor)}</select>`);
@@ -469,6 +472,7 @@ function renderResults() {
     if (r.util !== null && n.type !== 'sink') h += `<h3>Running at ${pct(r.util)}</h3>` +
       (ex ? `<div><b>${esc(reasonText(r.why))}</b></div>${ex.lines.map(l => `<p class="ex">${esc(l)}</p>`).join('')}` : '');
     if (Object.keys(r.maxIn).length) h += `<h3>Consumes /min</h3>` + rateTable(Object.keys(r.maxIn).map(i => [esc(itemName(i)), `${fmt(r.in[i])} / ${fmt(r.maxIn[i])}`]));
+    if (recipe(n.recipe)?.power) h += `<h3>Power: ${fmt(powerMW(n))} MW</h3>`;
     if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)) + (i in r.unconnected ? ' <span class="muted">(not connected, counted as storage)</span>' : ''), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
     if (n.type === 'sink' || JUNCTIONS.includes(n.type)) h += `<h3>Throughput /min</h3>` + rateTable(Object.entries(r.in).map(([i, v]) => [esc(itemName(i)), fmt(v)]));
     el.innerHTML = h;
@@ -497,6 +501,7 @@ function renderResults() {
     }
     el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
       (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
+      (G.nodes.some(powerMW) ? `<h3>Power made: ${fmt(G.nodes.reduce((a, n) => a + powerMW(n), 0))} MW</h3>` : '') +
       `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
       `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
       `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full and slowing something down. Yellow belts are exactly full with nothing waiting: perfect, but no room to grow. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
