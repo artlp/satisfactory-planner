@@ -89,10 +89,23 @@ function neighbours(id, dir, item, seen = new Set([id])) {
     const m = nodeById(there);
     if (!m) continue;
     if (JUNCTIONS.includes(m.type)) out.push(...neighbours(there, dir, item, seen));
-    else if (dir === 'up' || m.type === 'sink' || RES.nodes[m.id]?.maxIn[item]) out.push(m);
+    else if (dir === 'up' ? RES.nodes[m.id]?.maxOut[item] !== undefined : m.type === 'sink' || RES.nodes[m.id]?.maxIn[item]) out.push(m);
   }
   return out;
 }
+// Items that can reach node id: what upstream nodes make, through junctions and smart-splitter filters.
+function arriving(id, seen = new Set([id])) {
+  return [...new Set(G.edges.filter(e => e.to === id && !seen.has(e.from) && seen.add(e.from)).flatMap(e => {
+    const m = nodeById(e.from), items = m && JUNCTIONS.includes(m.type) ? arriving(m.id, seen) : Object.keys(RES.nodes[e.from]?.maxOut ?? {});
+    return e.item ? items.filter(i => i === e.item) : items;
+  }))];
+}
+// A recipe in the same building, making the same thing, that runs on what actually arrives.
+const betterRecipe = (n, got) => {
+  const r = recipe(n.recipe), makes = r?.out.map(o => o[0]) ?? [];
+  return DATA.recipes.filter(x => x.id !== r?.id && x.building === r?.building && x.out.some(o => makes.includes(o[0])) && x.in.every(([i]) => got.includes(i)))
+    .sort((a, b) => a.alt - b.alt)[0];
+};
 const fullBelt = (id, dir, item) => G.edges.find(e => (dir === 'down' ? e.from : e.to) === id && (!e.item || e.item === item) && RES.edges[e.id]?.util >= 0.995);
 // A full belt only matters if something waits on it: a backed-up node before it or a short node after it.
 function beltLimits(e) {
@@ -149,7 +162,12 @@ function explain(n, seen = new Set()) {
     if (full) {
       short = `Belt in is full (${beltName(full).replace('Conveyor Belt ', '')})`;
       lines.push(`The belt coming in (${beltName(full)}) is full at ${fmt(RES.edges[full.id].cap)}/min. ${beltFix(full)}`);
-    } else if (!up.length) { short = `No ${name} connected`; lines.push(`Nothing feeds it ${name}. Connect a belt.`); }
+    } else if (!up.length) {
+      const got = n.type === 'machine' ? arriving(n.id) : [], alt = got.length && betterRecipe(n, got);
+      short = alt ? `Wrong recipe? Try ${alt.name}` : `No ${name} connected`;
+      if (got.length) lines.push(`It gets ${got.map(itemName).join(', ')}, but its recipe needs ${name}.`);
+      lines.push(alt ? `Fix: switch the recipe to ${alt.name}, which uses ${alt.in.map(([i]) => itemName(i)).join(' + ')}.` : `Nothing feeds it ${name}. Connect a belt.`);
+    }
     else if (up.every(m => status(m) === 'starved')) { knock = true; blame(up, 'gets too little input'); }
     else {
       short = `${names(up)} send${up.length > 1 ? '' : 's'} too little ${name}`;
@@ -160,7 +178,7 @@ function explain(n, seen = new Set()) {
   }
   if (!knock && ['machine', 'extractor'].includes(n.type)) {
     const need = Math.ceil(n.count * r.util - 1e-6);
-    if (need < n.count) lines.push(`Or build less here: ${need} ${building(n, need)} would do the same job. Or keep all ${n.count} and underclock them to ${fmt(n.clock * r.util)}%.`);
+    if (need < n.count && need > 0) lines.push(`Or build less here: ${need} ${building(n, need)} would do the same job. Or keep all ${n.count} and underclock them to ${fmt(n.clock * r.util)}%.`);
     else if (n.count === 1) lines.push(`Or underclock it to ${fmt(n.clock * r.util)}% to save power.`);
   }
   return { lines, knock, short, root, rootWhy: rootWhy ?? short };
