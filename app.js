@@ -126,6 +126,40 @@ const moreOf = (m, item, amount, side) => {
   return per > 0 && ['machine', 'extractor'].includes(m.type) ? Math.ceil(amount / per - 1e-6) : 0;
 };
 
+const mainItem = n => n.type === 'machine' ? recipe(n.recipe)?.out[0]?.[0] : n.type === 'extractor' ? n.item : null;
+// What has to change, working back up the belts, for node n to put out `rate` of `item` per minute.
+// shortcut: extra demand is split over feeders by their max output and assumes splitters send it this way,
+// and only belts straight into a node are checked; upgrade if people need exact splitter ratios.
+function plan(n, item, rate, lines = [], depth = 0, seen = new Set()) {
+  const r = RES.nodes[n.id], max = r?.maxOut[item] ?? 0;
+  if (!r || seen.has(n.id)) return lines;
+  seen.add(n.id);
+  const say = t => lines.push({ depth, t }), title = nodeTitle(n)[0], name = itemName(item);
+  if (n.type === 'input') {
+    say(rate > max + 0.05 ? `${title}: raise it to ${fmt(rate)} ${name}/min (now ${fmt(max)}).` : `${title}: enough, it brings ${fmt(max)}/min.`);
+    return lines;
+  }
+  if (!max) return lines;
+  if (rate > max + 0.05) {
+    const k = Math.ceil(rate / (max / n.count) - 1e-6), clock = n.clock * rate / max;
+    say(`${title}: needs to make ${fmt(rate)} ${name}/min but tops out at ${fmt(max)}. Build ${k} instead of ${n.count}` +
+      (clock <= 250 ? `, or overclock ${n.count > 1 ? `all ${n.count}` : 'it'} to ${fmt(clock)}%.` : '.'));
+  } else say(`${title}: enough ${building(n, n.count)} for ${fmt(rate)} ${name}/min (max ${fmt(max)}).`);
+  if (depth === 0 && r.why?.startsWith('blocked')) say(`Its output is backed up now, so whatever comes after it must take the extra too.`);
+  for (const i in r.maxIn) {
+    const need = r.maxIn[i] * rate / max, extra = need - r.in[i];
+    if (extra <= 0.05) continue;
+    say(`Needs ${fmt(need)} ${itemName(i)}/min, gets ${fmt(r.in[i])}: ${fmt(extra)}/min more.`);
+    const belts = G.edges.filter(e => e.to === n.id && (e.item === i || RES.edges[e.id]?.flow[i]));
+    const cap = belts.reduce((a, e) => a + RES.edges[e.id].cap, 0);
+    if (belts.length && cap < need - 0.05) say(`The belt${belts.length > 1 ? 's' : ''} into it carry only ${fmt(cap)}/min. Upgrade or add a belt.`);
+    const up = neighbours(n.id, 'up', i), total = up.reduce((a, m) => a + RES.nodes[m.id].maxOut[i], 0);
+    if (!up.length) say(`Nothing feeds it ${itemName(i)}. Connect a source.`);
+    for (const m of up) plan(m, i, RES.nodes[m.id].out[i] + extra * RES.nodes[m.id].maxOut[i] / total, lines, depth + 1, seen);
+  }
+  return lines;
+}
+
 // Plain-English "why is this not at 100% and what do I do about it". knock = caused by something else.
 // Returns { lines, knock, short, root }: short = one-line cause for the node card, root = node with the real problem.
 function explain(n, seen = new Set()) {
@@ -204,6 +238,7 @@ function nodeHTML(n) {
   let body = '';
   if (r && !JUNCTIONS.includes(n.type) && n.type !== 'sink' && r.why !== 'unconfigured')
     body += `<div class="u">${pct(r.util)}</div>`;
+  if (n.target && mainItem(n)) body += `<div class="r">🎯 want ${fmt(n.target)}/min</div>`;
   if (recipe(n.recipe)?.power) body += `<div class="r">⚡ ${fmt(powerMW(n))} MW</div>`;
   if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(explain(n)?.short ?? reasonText(r.why))}</div>`;
   if (r) {
@@ -440,6 +475,11 @@ function renderForm() {
       h += field('Rate /min', `<input data-k="rate" type="number" min="0" step="any" value="${n.rate}">`);
       h += `<div class="muted">Use for trains, trucks, drones or another factory feeding this one.</div>`;
     }
+    const main = mainItem(n);
+    if (main) {
+      h += `<label class="inline" style="margin-bottom:6px"><input type="checkbox" data-k="target" ${n.target ? 'checked' : ''}> Plan a target rate</label>`;
+      if (n.target) h += field(`Want ${esc(itemName(main))} /min`, `<input data-k="target" type="number" min="0" step="any" value="${n.target}">`);
+    }
     h += `<div class="row"><button id="dupBtn">Duplicate</button><button class="danger" id="delBtn">Delete</button></div>`;
     f.innerHTML = h;
   } else if (sel?.edge) {
@@ -461,12 +501,13 @@ function renderForm() {
     const obj = sel.node ? nodeById(sel.node) : G.edges.find(x => x.id === sel.edge), k = inp.dataset.k;
     let v = inp.value;
     if (k === 'recipe') { const r = DATA.recipes.find(r => recipeLabel(r) === v); if (!r) return; v = r.id; }
+    else if (inp.type === 'checkbox') v = inp.checked ? Math.round(RES.nodes[obj.id]?.maxOut[mainItem(obj)] ?? 0) || 60 : null;
     else if (inp.type === 'number' || inp.dataset.num !== undefined) {
       v = Number(v);
       if (k === 'clock') v = Math.min(250, Math.max(1, v || 100));
       if (k === 'count') v = Math.max(1, Math.round(v) || 1);
       if (k === 'rate') v = Math.max(0, v || 0);
-      if (k === 'measured') v = v > 0 ? v : null;
+      if (k === 'measured' || k === 'target') v = v > 0 ? v : null;
     } else if (v === '') v = k === 'label' ? '' : null;
     obj[k] = v;
     if (k === 'extractor' && !extractor(v).allowed.includes(obj.item)) obj.item = extractor(v).allowed[0];
@@ -489,6 +530,8 @@ function renderResults() {
     const ex = explain(n);
     if (r.util !== null && n.type !== 'sink') h += `<h3>Running at ${pct(r.util)}</h3>` +
       (ex ? `<div><b>${esc(reasonText(r.why))}</b></div>${ex.lines.map(l => `<p class="ex">${esc(l)}</p>`).join('')}` : '');
+    if (n.target && mainItem(n)) h += `<h3>To make ${fmt(n.target)} ${esc(itemName(mainItem(n)))}/min</h3>` +
+      plan(n, mainItem(n), n.target).map(l => `<p class="ex" style="padding-left:${l.depth * 14}px">${l.depth ? '↳ ' : ''}${esc(l.t)}</p>`).join('');
     if (Object.keys(r.maxIn).length) h += `<h3>Consumes /min</h3>` + rateTable(Object.keys(r.maxIn).map(i => [esc(itemName(i)), `${fmt(r.in[i])} / ${fmt(r.maxIn[i])}`]));
     if (recipe(n.recipe)?.power) h += `<h3>Power: ${fmt(powerMW(n))} MW</h3>`;
     if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)) + (i in r.unconnected ? ' <span class="muted">(not connected, counted as storage)</span>' : ''), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
