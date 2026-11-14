@@ -15,7 +15,7 @@ Recipes come from the game's own `CommunityResources/Docs/en-US.json` (built aga
 
 ```
 python tools/extract.py "<Satisfactory>/CommunityResources/Docs/en-US.json"
-node tools/sim.test.js
+node tools/sim.test.js && node tools/advice.test.js
 ```
 
 No build step: it's static HTML/JS, served straight by GitHub Pages. Run locally with `python -m http.server`.

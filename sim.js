@@ -4,7 +4,7 @@
 // This reproduces backpressure, starvation, blocked byproducts and loops.
 (function () {
   const BUF = 4;           // seconds of throughput a machine buffers
-  const WARMUP = 3000, MEASURE = 600;
+  const WARMUP = 3000, MEASURE = 600, BLOCK = 300; // warm-up ends early once two BLOCKs in a row match
 
   function simulate(graph, data) {
     const recipes = Object.fromEntries(data.recipes.map(r => [r.id, r]));
@@ -29,7 +29,7 @@
     }
     const edges = graph.edges.filter(e => S[e.from] && S[e.to] && e.from !== e.to).map(e => ({
       // a rate measured in game caps the belt below its tier speed
-      e, cap: Math.min(tiers[e.tier] ?? 1e9, e.measured > 0 ? e.measured / 60 : Infinity), flow: {}, sent: 0,
+      e, cap: Math.min(tiers[e.tier] ?? 1e9, e.measured > 0 ? e.measured / 60 : Infinity), flow: {}, moved: 0,
     }));
     for (const E of edges) { outEdges[E.e.from].push(E); inEdges[E.e.to].push(E); }
     // An output with no belt that could carry it is treated as going to storage, not as blocked.
@@ -37,12 +37,13 @@
       s.free = Object.keys(s.make).filter(i => !outEdges[s.n.id].some(E => !E.e.item || E.e.item === i));
       s.dump = {};
     }
+    const sum = o => { let a = 0; for (const k in o) a += o[k]; return a; };
     for (const s of Object.values(S)) {
       if (s.kind === 'splitter' || s.kind === 'merger')
         s.cap = Math.max(1, inEdges[s.n.id].reduce((a, E) => a + Math.min(E.cap, 1e4), 0)) * 2;
+      s.tick = s.cap ? s.cap / 2 : sum(s.need) + sum(s.make); // most it moves in one tick
     }
 
-    const sum = o => Object.values(o).reduce((a, b) => a + b, 0);
     // free space for `item` in node s
     function space(s, item) {
       if (s.kind === 'sink') return Infinity;
@@ -63,6 +64,7 @@
             dst.in[item] = (dst.in[item] || 0) + take;
             edgeRoom.set(E, edgeRoom.get(E) - take);
             moved += take;
+            E.moved += take;
             if (measuring) E.flow[item] = (E.flow[item] || 0) + take;
           }
           if (take >= share - 1e-12) next.push(E);
@@ -75,10 +77,21 @@
 
     let seed = 1;
     const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const order = Object.values(S);
+    const order = Object.values(S), list = Object.values(S);
+    let measureFrom = WARMUP, prev = null;
 
-    for (let t = 0; t < WARMUP + MEASURE; t++) {
-      const measuring = t >= WARMUP;
+    for (let t = 0; t < measureFrom + MEASURE; t++) {
+      // Steady when machine speeds and belt flows repeat within 1% and no buffer is still filling.
+      // The tick order is shuffled, so a block can differ from the last by about one tick's worth.
+      if (t < measureFrom && t && t % BLOCK === 0) {
+        const cur = [...list.map(s => [s.bp || 0, BLOCK / 100]), ...edges.map(E => [E.moved, Math.max(BLOCK, E.moved) / 100]),
+          ...list.filter(s => s.kind !== 'sink').map(s => [sum(s.in) + sum(s.out), s.tick])];
+        if (prev && cur.every(([v, tol], i) => Math.abs(v - prev[i][0]) <= tol)) measureFrom = t;
+        prev = cur;
+        for (const s of list) s.bp = 0;
+        for (const E of edges) E.moved = 0;
+      }
+      const measuring = t >= measureFrom;
       // 1. produce / consume
       for (const s of order) {
         if (s.kind === 'sink') {
@@ -94,6 +107,7 @@
         for (const i in s.need) s.in[i] -= s.need[i] * p;
         for (const i in s.make) s.out[i] = (s.out[i] || 0) + s.make[i] * p;
         for (const i of s.free) { if (measuring) s.dump[i] = (s.dump[i] || 0) + s.out[i]; s.out[i] = 0; }
+        s.bp = (s.bp || 0) + p;
         if (measuring) { s.p += p; if (why && p < 0.999) s.why[why] = (s.why[why] || 0) + 1; }
       }
       // 2. move items along edges. Shuffle, then reverse next tick: every pair of

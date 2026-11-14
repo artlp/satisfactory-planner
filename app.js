@@ -3,15 +3,8 @@ const view = { x: 40, y: 40, k: 1 };
 const $ = s => document.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 9);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-const fmt = v => (Math.round(v * 10) / 10).toLocaleString();
 const pct = v => Math.round(v * 100) + '%';
-const itemName = i => DATA.items[i]?.name ?? i;
-const recipe = id => DATA.recipes.find(r => r.id === id);
-const extractor = id => DATA.extractors.find(e => e.id === id);
 const tiers = () => [...DATA.belts, ...DATA.pipes];
-const PURITY = { 0.5: 'Impure', 1: 'Normal', 2: 'Pure' };
-const JUNCTIONS = ['splitter', 'merger'];
-const nodeById = id => G.nodes.find(n => n.id === id);
 const recipeLabel = r => `${r.name} — ${DATA.buildings[r.building]}`;
 // MW a generator node makes right now (power scales linearly with clock and count)
 const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.recipe).power * n.count * n.clock / 100 * (RES.nodes[n.id]?.util ?? 0) : 0;
@@ -19,7 +12,6 @@ const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.
 // ---------- persistence ----------
 const save = () => { try { localStorage.setItem('ffp-graph', JSON.stringify(G)); } catch {} };
 const loadLocal = () => { try { return JSON.parse(localStorage.getItem('ffp-graph')); } catch { return null; } };
-const valid = g => g && Array.isArray(g.nodes) && Array.isArray(g.edges);
 
 async function encode(obj) {
   const stream = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
@@ -63,176 +55,6 @@ const applyView = () => {
   viewport.style.backgroundSize = `${24 * view.k}px ${24 * view.k}px`;
 };
 
-function status(n) {
-  const r = RES.nodes[n.id];
-  if (JUNCTIONS.includes(n.type) || n.type === 'sink' || !r) return '';
-  if (r.why === 'unconfigured') return 'idle';
-  if (r.util >= 0.995) return 'ok';
-  return r.why?.startsWith('blocked') ? 'blocked' : 'starved';
-}
-
-function reasonText(why) {
-  if (!why) return '';
-  const [k, i] = why.split(':');
-  if (k === 'starved') return `Not enough ${itemName(i)} coming in`;
-  if (k === 'blocked') return `Makes more ${itemName(i)} than gets used`;
-  return 'Not configured';
-}
-
-// Nodes that feed (dir 'up') or take (dir 'down') `item` from node `id`, looking through splitters/mergers.
-function neighbours(id, dir, item, seen = new Set([id])) {
-  const out = [];
-  for (const e of G.edges) {
-    const [here, there] = dir === 'down' ? [e.from, e.to] : [e.to, e.from];
-    if (here !== id || (e.item && e.item !== item) || seen.has(there)) continue;
-    seen.add(there);
-    const m = nodeById(there);
-    if (!m) continue;
-    if (JUNCTIONS.includes(m.type)) out.push(...neighbours(there, dir, item, seen));
-    else if (dir === 'up' ? RES.nodes[m.id]?.maxOut[item] !== undefined : m.type === 'sink' || RES.nodes[m.id]?.maxIn[item]) out.push(m);
-  }
-  return out;
-}
-// Items that can reach node id: what upstream nodes make, through junctions and smart-splitter filters.
-function arriving(id, seen = new Set([id])) {
-  return [...new Set(G.edges.filter(e => e.to === id && !seen.has(e.from) && seen.add(e.from)).flatMap(e => {
-    const m = nodeById(e.from), items = m && JUNCTIONS.includes(m.type) ? arriving(m.id, seen) : Object.keys(RES.nodes[e.from]?.maxOut ?? {});
-    return e.item ? items.filter(i => i === e.item) : items;
-  }))];
-}
-// A recipe in the same building, making the same thing, that runs on what actually arrives.
-const betterRecipe = (n, got) => {
-  const r = recipe(n.recipe), makes = r?.out.map(o => o[0]) ?? [];
-  return DATA.recipes.filter(x => x.id !== r?.id && x.building === r?.building && x.out.some(o => makes.includes(o[0])) && x.in.every(([i]) => got.includes(i)))
-    .sort((a, b) => a.alt - b.alt)[0];
-};
-const fullBelt = (id, dir, item) => G.edges.find(e => (dir === 'down' ? e.from : e.to) === id && (!e.item || e.item === item) && RES.edges[e.id]?.util >= 0.995);
-// A full belt only matters if something waits on it: a backed-up node before it or a short node after it.
-function beltLimits(e) {
-  const r = RES.edges[e.id], items = Object.keys(r?.flow ?? {});
-  const ends = (id, dir) => JUNCTIONS.includes(nodeById(id)?.type) ? items.flatMap(i => neighbours(id, dir, i)) : [nodeById(id)].filter(Boolean);
-  return ends(e.from, 'up').some(m => status(m) === 'blocked') || ends(e.to, 'down').some(m => status(m) === 'starved');
-}
-const beltName = e => e.measured ? `${e.tier}, measured ${fmt(e.measured)}/min` : e.tier;
-const beltFix = e => e.measured ? 'That is your measured rate, so check in game what holds that belt back.' : 'Upgrade it or add a second belt.';
-const names = list => list.map(m => nodeTitle(m)[0]).join(', ');
-const building = (n, k) => {
-  const b = n.type === 'machine' ? DATA.buildings[recipe(n.recipe)?.building] ?? 'machine' : extractor(n.extractor)?.name ?? 'building';
-  return k > 1 ? b.replace(/y$/, 'ie') + 's' : b;
-};
-// How many more of node m it takes to move `amount` more of `item` per minute.
-const moreOf = (m, item, amount, side) => {
-  const per = (RES.nodes[m.id]?.[side][item] ?? 0) / (m.count || 1);
-  return per > 0 && ['machine', 'extractor'].includes(m.type) ? Math.ceil(amount / per - 1e-6) : 0;
-};
-
-const mainItem = n => n.type === 'machine' ? recipe(n.recipe)?.out[0]?.[0] : n.type === 'extractor' ? n.item : null;
-// What has to change, working back up the belts, for node n to put out `rate` of `item` per minute.
-// shortcut: extra demand is split over feeders by their max output and assumes splitters send it this way,
-// and only belts straight into a node are checked; upgrade if people need exact splitter ratios.
-function plan(n, item, rate, lines = [], depth = 0, seen = new Set()) {
-  const r = RES.nodes[n.id], max = r?.maxOut[item] ?? 0;
-  if (!r || seen.has(n.id)) return lines;
-  seen.add(n.id);
-  const say = t => lines.push({ depth, t }), title = nodeTitle(n)[0], name = itemName(item);
-  if (n.type === 'input') {
-    say(rate > max + 0.05 ? `${title}: raise it to ${fmt(rate)} ${name}/min (now ${fmt(max)}).` : `${title}: enough, it brings ${fmt(max)}/min.`);
-    return lines;
-  }
-  if (!max) return lines;
-  if (rate > max + 0.05) {
-    const k = Math.ceil(rate / (max / n.count) - 1e-6), clock = n.clock * rate / max;
-    say(`${title}: needs to make ${fmt(rate)} ${name}/min but tops out at ${fmt(max)}. Build ${k} instead of ${n.count}` +
-      (clock <= 250 ? `, or overclock ${n.count > 1 ? `all ${n.count}` : 'it'} to ${fmt(clock)}%.` : '.'));
-  } else say(`${title}: enough ${building(n, n.count)} for ${fmt(rate)} ${name}/min (max ${fmt(max)}).`);
-  if (depth === 0 && r.why?.startsWith('blocked')) say(`Its output is backed up now, so whatever comes after it must take the extra too.`);
-  for (const i in r.maxIn) {
-    const need = r.maxIn[i] * rate / max, extra = need - r.in[i];
-    if (extra <= 0.05) continue;
-    say(`Needs ${fmt(need)} ${itemName(i)}/min, gets ${fmt(r.in[i])}: ${fmt(extra)}/min more.`);
-    const belts = G.edges.filter(e => e.to === n.id && (e.item === i || RES.edges[e.id]?.flow[i]));
-    const cap = belts.reduce((a, e) => a + RES.edges[e.id].cap, 0);
-    if (belts.length && cap < need - 0.05) say(`The belt${belts.length > 1 ? 's' : ''} into it carry only ${fmt(cap)}/min. Upgrade or add a belt.`);
-    const up = neighbours(n.id, 'up', i), total = up.reduce((a, m) => a + RES.nodes[m.id].maxOut[i], 0);
-    if (!up.length) say(`Nothing feeds it ${itemName(i)}. Connect a source.`);
-    for (const m of up) plan(m, i, RES.nodes[m.id].out[i] + extra * RES.nodes[m.id].maxOut[i] / total, lines, depth + 1, seen);
-  }
-  return lines;
-}
-
-// Plain-English "why is this not at 100% and what do I do about it". knock = caused by something else.
-// Returns { lines, knock, short, root }: short = one-line cause for the node card, root = node with the real problem.
-function explain(n, seen = new Set()) {
-  const r = RES.nodes[n.id];
-  if (!r || r.util === null || r.util >= 0.995 || !r.why || r.why === 'unconfigured' || seen.has(n.id)) return null;
-  seen.add(n.id);
-  const [kind, item] = r.why.split(':'), name = itemName(item), lines = [];
-  let knock = false, short = reasonText(r.why), root = n, rootWhy = null;
-  // follow a knock-on chain to the node that actually has the problem
-  const blame = (list, verb) => {
-    const ex = list.map(m => explain(m, seen)).find(Boolean);
-    root = ex?.root ?? list[0];
-    const why = rootWhy = ex ? ex.rootWhy : verb;
-    short = `Held back by ${nodeTitle(root)[0]}`;
-    lines.push(`This is a knock-on effect, not a problem here. The real cause is ${nodeTitle(root)[0]} (${why}). Fix that and this speeds up too.`);
-  };
-  if (kind === 'blocked') {
-    const made = r.out[item], extra = r.maxOut[item] - made, full = fullBelt(n.id, 'down', item), down = neighbours(n.id, 'down', item);
-    lines.push(`It could make ${fmt(r.maxOut[item])} ${name}/min, but only ${fmt(made)}/min gets taken away.`);
-    if (full) {
-      short = `Belt out is full (${beltName(full).replace('Conveyor Belt ', '')})`;
-      lines.push(`The belt leaving it (${beltName(full)}) is full at ${fmt(RES.edges[full.id].cap)}/min. ${beltFix(full)}`);
-    } else if (!down.length) { short = `Nothing uses its ${name}`; lines.push(`Nothing connected after it uses ${name}.`); }
-    else if (down.every(m => status(m) === 'blocked')) { knock = true; blame(down, 'makes more than gets used'); }
-    else {
-      short = `${names(down)} can't use more`;
-      lines.push(`${names(down)} only use${down.length > 1 ? '' : 's'} ${fmt(made)}/min of it.`);
-      const k = down.length === 1 ? moreOf(down[0], item, extra, 'maxIn') : 0;
-      if (k) lines.push(`Fix: add ${k} more ${building(down[0], k)} after it to use the extra ${fmt(extra)}/min.`);
-    }
-  } else if (kind === 'starved') {
-    const got = r.in[item], missing = r.maxIn[item] - got, full = fullBelt(n.id, 'up', item), up = neighbours(n.id, 'up', item);
-    lines.push(`It needs ${fmt(r.maxIn[item])} ${name}/min but only gets ${fmt(got)}/min, ${fmt(missing)}/min short.`);
-    if (full) {
-      short = `Belt in is full (${beltName(full).replace('Conveyor Belt ', '')})`;
-      lines.push(`The belt coming in (${beltName(full)}) is full at ${fmt(RES.edges[full.id].cap)}/min. ${beltFix(full)}`);
-    } else if (!up.length) {
-      const got = n.type === 'machine' ? arriving(n.id) : [], alt = got.length && betterRecipe(n, got);
-      short = alt ? `Wrong recipe? Try ${alt.name}` : `No ${name} connected`;
-      if (got.length) lines.push(`It gets ${got.map(itemName).join(', ')}, but its recipe needs ${name}.`);
-      lines.push(alt ? `Fix: switch the recipe to ${alt.name}, which uses ${alt.in.map(([i]) => itemName(i)).join(' + ')}.` : `Nothing feeds it ${name}. Connect a belt.`);
-    }
-    else if (up.every(m => status(m) === 'starved')) { knock = true; blame(up, 'gets too little input'); }
-    else {
-      short = `${names(up)} send${up.length > 1 ? '' : 's'} too little ${name}`;
-      lines.push(`${names(up)} only suppl${up.length > 1 ? 'y' : 'ies'} ${fmt(got)}/min.`);
-      const k = up.length === 1 ? moreOf(up[0], item, missing, 'maxOut') : 0;
-      if (k) lines.push(`Fix: add ${k} more ${building(up[0], k)} before it to cover the missing ${fmt(missing)}/min.`);
-    }
-  }
-  if (!knock && ['machine', 'extractor'].includes(n.type)) {
-    const need = Math.ceil(n.count * r.util - 1e-6);
-    if (need < n.count && need > 0) lines.push(`Or build less here: ${need} ${building(n, need)} would do the same job. Or keep all ${n.count} and underclock them to ${fmt(n.clock * r.util)}%.`);
-    else if (n.count === 1) lines.push(`Or underclock it to ${fmt(n.clock * r.util)}% to save power.`);
-  }
-  return { lines, knock, short, root, rootWhy: rootWhy ?? short };
-}
-
-function nodeTitle(n) {
-  if (n.type === 'machine') {
-    const r = recipe(n.recipe);
-    const clock = n.clock !== 100 ? ` @${n.clock}%` : '';
-    return [(n.label || (r ? DATA.buildings[r.building] : 'Machine')) + ` ×${n.count}${clock}`, r ? r.name : 'pick a recipe'];
-  }
-  if (n.type === 'extractor') {
-    const e = extractor(n.extractor);
-    const clock = n.clock !== 100 ? ` @${n.clock}%` : '';
-    return [`${n.label || e?.name || 'Extractor'} ×${n.count}${clock}`, `${itemName(n.item)} (${PURITY[n.purity] ?? n.purity})`];
-  }
-  if (n.type === 'input') return [n.label || 'Input', `${itemName(n.item) || 'pick an item'} · ${fmt(n.rate)}/min`];
-  return [n.label || { splitter: 'Splitter', merger: 'Merger', sink: 'Sink / Output' }[n.type], ''];
-}
-
 function nodeHTML(n) {
   const r = RES.nodes[n.id], [t, s] = nodeTitle(n), st = status(n);
   let body = '';
@@ -275,7 +97,7 @@ function renderWires(temp) {
   for (const e of G.edges) {
     if (!nodeById(e.from) || !nodeById(e.to)) continue;
     const a = portPos(e.from, 'out'), b = portPos(e.to, 'in'), d = curve(a, b), r = RES.edges[e.id];
-    const full = r && r.util >= 0.995, state = full ? (beltLimits(e) ? 'full' : 'maxed') : r?.total > 0 ? 'flow' : 'none';
+    const full = r && r.util >= FULL, state = full ? (beltLimits(e) ? 'full' : 'maxed') : r?.total > 0 ? 'flow' : 'none';
     const cls = `wire ${state} ${sel?.edge === e.id ? 'sel' : ''}`;
     const items = r ? Object.keys(r.flow).filter(i => r.flow[i] > 0.01) : [];
     const what = e.item ? itemName(e.item) : items.length === 1 ? itemName(items[0]) : items.length ? `${items.length} items` : '';
@@ -545,10 +367,10 @@ function renderResults() {
     const issues = [];
     for (const e of G.edges) {
       const r = RES.edges[e.id];
-      if (r && r.util >= 0.995 && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(beltName(e))})` +
+      if (r && r.util >= FULL && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(beltName(e))})` +
         `<p class="ex">This belt is full and something next to it is waiting on it. Upgrade the belt or add a second one.</p>` });
     }
-    const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < 0.995)
+    const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < FULL)
       .map(n => ({ n, r: RES.nodes[n.id], ex: explain(n) }))
       .sort((a, b) => (a.ex?.knock ?? 0) - (b.ex?.knock ?? 0) || a.r.util - b.r.util); // real causes first, knock-on effects last
     for (const { n, r, ex } of under) {
@@ -608,7 +430,8 @@ $('#clearBtn').addEventListener('click', () => {
   if (location.hash.startsWith('#g=')) {
     try {
       const shared = await decode(location.hash.slice(3));
-      if (valid(shared) && (!valid(G) || !G.nodes.length || confirm('Open the shared build? It replaces the one saved in this browser.'))) G = shared;
+      if (!valid(shared)) throw 0;
+      if (!valid(G) || !G.nodes.length || confirm('Open the shared build? It replaces the one saved in this browser.')) G = shared;
     } catch { alert('The share link is damaged.'); }
     history.replaceState(null, '', location.pathname);
   }
