@@ -53,8 +53,15 @@
     }
 
     // Distribute `amt` of `item` from a source over edges (water-filling), returns amount moved.
+    // Overflow edges (smart splitter overflow rule) only get what the other edges can't take.
     function push(item, amt, list, edgeRoom, measuring) {
-      let moved = 0, open = list.filter(E => (!E.e.item || E.e.item === item));
+      const fits = list.filter(E => !E.e.item || E.e.item === item), main = fits.filter(E => !E.e.overflow);
+      if (!main.length || main.length === fits.length) return fill(item, amt, fits, edgeRoom, measuring);
+      const moved = fill(item, amt, main, edgeRoom, measuring);
+      return moved + fill(item, amt - moved, fits.filter(E => E.e.overflow), edgeRoom, measuring);
+    }
+    function fill(item, amt, open, edgeRoom, measuring) {
+      let moved = 0;
       while (amt - moved > 1e-9 && open.length) {
         const share = (amt - moved) / open.length, next = [];
         for (const E of open) {

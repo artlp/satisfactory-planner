@@ -88,4 +88,12 @@ near(r.nodes.s.util, 1, 'scrap refinery runs full');
 near(r.edges['s>a'].total, 300, 'all recycled water used');
 near(r.nodes.w.util, 600 / 720, 'extractors throttle instead');
 
+// 11. overflow splitter: 250 silica, foundry takes its 187.5 first, only the rest overflows to the sink
+r = simulate({ nodes: [{ id: 'q', type: 'input', item: 'Desc_Silica_C', rate: 250 }, { id: 'x', type: 'input', item: 'Desc_AluminumScrap_C', rate: 600 },
+  { id: 'sp', type: 'splitter' }, { ...m('f', 'Recipe_IngotAluminum_C'), clock: 250 }, { id: 'k', type: 'sink' }],
+  edges: [e('q', 'sp', 'Conveyor Belt Mk.3'), e('x', 'f', 'Conveyor Belt Mk.5'), e('sp', 'f', 'Conveyor Belt Mk.3'), { ...e('sp', 'k', 'Conveyor Belt Mk.3'), overflow: true }] }, data);
+near(r.edges['sp>f'].total, 187.5, 'foundry gets all it needs');
+near(r.edges['sp>k'].total, 62.5, 'only the excess overflows');
+near(r.nodes.f.util, 1, 'foundry full');
+
 console.log('all sim tests passed');

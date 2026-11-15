@@ -429,6 +429,7 @@ function renderForm() {
       `<div class="muted" style="margin:-4px 0 8px">Type what your throughput monitor shows. The planner then treats this belt as only carrying that much.</div>` +
       field(src.type === 'machine' ? 'Output port carries' : 'Only carry (smart splitter filter)',
         `<select data-k="item"><option value="">Any</option>${options(outs, e.item)}</select>`) +
+      (src.type === 'splitter' ? `<label class="inline" style="margin-bottom:6px"><input type="checkbox" data-k="overflow" ${e.overflow ? 'checked' : ''}> Overflow (smart splitter): only gets what the other outputs can't take</label>` : '') +
       `<div class="row"><button class="danger" id="delBtn">Delete</button></div>`;
   } else if (sel?.zone) {
     const z = zoneById(sel.zone), inside = G.nodes.filter(n => inZone(z, n)).length;
@@ -445,6 +446,7 @@ function renderForm() {
     const obj = sel.node ? nodeById(sel.node) : sel.zone ? zoneById(sel.zone) : G.edges.find(x => x.id === sel.edge), k = inp.dataset.k;
     let v = inp.value;
     if (k === 'recipe') { const r = DATA.recipes.find(r => recipeLabel(r) === v); if (!r) return; v = r.id; }
+    else if (k === 'overflow') v = inp.checked || null;
     else if (inp.type === 'checkbox') v = inp.checked ? Math.round(RES.nodes[obj.id]?.maxOut[mainItem(obj)] ?? 0) || 60 : null;
     else if (inp.type === 'number' || inp.dataset.num !== undefined) {
       v = Number(v);
