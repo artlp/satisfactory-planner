@@ -124,6 +124,7 @@ function renderCanvas() {
     el.innerHTML = nodeHTML(n);
     world.appendChild(el);
   }
+  markFound();
   renderWires();
 }
 
@@ -245,6 +246,8 @@ viewport.addEventListener('wheel', ev => {
 }, { passive: false });
 
 document.addEventListener('keydown', ev => {
+  // the browser's own find can't pan the board to a hit, so Ctrl+F goes to our search
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('#search').focus(); $('#search').select(); return; }
   if (ev.target.closest('input, select, textarea')) return;
   if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel) { ev.preventDefault(); removeSelected(); }
   if (ev.key === 'Escape') select(null);
@@ -325,6 +328,33 @@ function focusNode(id) {
   view.x = r.width / 2 - (n.x + 90) * view.k; view.y = r.height / 2 - (n.y + 40) * view.k;
   applyView(); select({ node: id });
 }
+
+// ---------- search: nodes by name, recipe, label or any item they use or make; zones by name ----------
+let found = [], foundAt = 0;
+const searchText = o => (G.zones.includes(o) ? [zoneName(o)]
+  : [...nodeTitle(o), ...Object.keys({ ...RES.nodes[o.id]?.maxIn, ...RES.nodes[o.id]?.maxOut }).map(itemName)]).join(' ').toLowerCase();
+const markFound = () => world.querySelectorAll('.node, .zone').forEach(el =>
+  el.classList.toggle('match', found.some(o => o.id === (el.dataset.id ?? el.dataset.zone))));
+
+function search(step) { // step 0 = new query (first hit), 1 / -1 = next / previous
+  const words = $('#search').value.toLowerCase().split(/\s+/).filter(Boolean);
+  found = words.length ? [...G.zones, ...G.nodes].filter(o => { const t = searchText(o); return words.every(w => t.includes(w)); }) : [];
+  foundAt = found.length ? (step ? (foundAt + step + found.length) % found.length : 0) : 0;
+  $('#searchCount').textContent = found.length ? `${foundAt + 1}/${found.length}` : words.length ? 'none' : '';
+  markFound();
+  const o = found[foundAt];
+  if (!o) return;
+  if (!G.zones.includes(o)) return focusNode(o.id);
+  const r = viewport.getBoundingClientRect();
+  view.k = Math.min(view.k, r.width / (o.w + 80), r.height / (o.h + 80)); // zoom out if the zone doesn't fit
+  view.x = r.width / 2 - (o.x + o.w / 2) * view.k; view.y = r.height / 2 - (o.y + o.h / 2) * view.k;
+  applyView(); select({ zone: o.id });
+}
+$('#search').addEventListener('input', () => search(0));
+$('#search').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') search(ev.shiftKey ? -1 : 1);
+  if (ev.key === 'Escape') { ev.target.value = ''; search(0); ev.target.blur(); }
+});
 
 // ---------- side panel ----------
 const field = (label, html) => `<label class="f">${label}${html}</label>`;

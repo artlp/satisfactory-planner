@@ -60,6 +60,7 @@
   aside .row { display: flex; gap: 6px; margin-top: 10px; }
   .zone { position: absolute; border: 2px dashed var(--zc); border-radius: 10px; background: color-mix(in srgb, var(--zc) 7%, transparent); pointer-events: none; }
   .zone.sel { border-style: solid; }
+  .node.match, .zone.match { outline: 3px solid #58a6ff; outline-offset: 3px; }
   .zone .zt { pointer-events: auto; cursor: move; user-select: none; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 3px 12px; font-size: 15px; font-weight: 600; color: var(--zc); background: var(--panel); border-radius: 8px 0 8px 0; }
   .zone .zr { pointer-events: auto; position: absolute; right: -2px; bottom: -2px; width: 16px; height: 16px; cursor: nwse-resize;
@@ -71,6 +72,9 @@
 <body>
 <header>
   <h1>Factory Flow Planner</h1>
+  <input id="search" type="search" placeholder="Search (Ctrl+F)" title="Enter = next, Shift+Enter = previous, Esc = clear" style="width:170px">
+  <span id="searchCount" class="muted"></span>
+  <span class="sep"></span>
   <button data-add="extractor">+ Miner / Extractor</button>
   <button data-add="machine">+ Machine</button>
   <button data-add="splitter">+ Splitter</button>
