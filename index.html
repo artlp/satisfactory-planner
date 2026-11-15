@@ -90,12 +90,13 @@
   <button id="importBtn">Import</button>
   <input id="importFile" type="file" accept=".json,application/json" hidden>
   <button id="shareBtn">Copy share link</button>
+  <button id="undoBtn" title="Ctrl+Z">Undo</button>
   <button id="clearBtn" class="danger">Clear</button>
 </header>
 <main>
   <div id="viewport">
     <div id="world"><svg id="wires"></svg></div>
-    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection · + Zone marks an area (drag its name to move it with everything inside)</div>
+    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection · Ctrl+Z undoes · + Zone marks an area (drag its name to move it with everything inside)</div>
   </div>
   <aside><div id="form"></div><div id="results"></div></aside>
 </main>

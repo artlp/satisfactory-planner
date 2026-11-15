@@ -10,7 +10,22 @@ const recipeLabel = r => `${r.name} — ${DATA.buildings[r.building]}`;
 const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.recipe).power * n.count * n.clock / 100 * (RES.nodes[n.id]?.util ?? 0) : 0;
 
 // ---------- persistence ----------
-const save = () => { try { localStorage.setItem('ffp-graph', JSON.stringify(G)); } catch {} };
+// Undo: every saved change keeps the build from before it. Kept per browser tab, so it survives a reload.
+// shortcut: whole-build snapshots, last 30; fine for hand-drawn factories, switch to diffs if builds get huge.
+let undoStack = (() => { try { return JSON.parse(sessionStorage.getItem('ffp-undo')) || []; } catch { return []; } })(), lastSaved = null;
+const keepUndo = () => { try { sessionStorage.setItem('ffp-undo', JSON.stringify(undoStack)); } catch {} };
+const save = () => {
+  const now = JSON.stringify(G);
+  if (lastSaved !== null && now !== lastSaved) { undoStack = [...undoStack, lastSaved].slice(-30); keepUndo(); }
+  lastSaved = now;
+  try { localStorage.setItem('ffp-graph', now); } catch {}
+};
+function undo() {
+  if (!undoStack.length) return;
+  lastSaved = undoStack.pop(); keepUndo();
+  G = JSON.parse(lastSaved);
+  sel = null; renderCanvas(); select(null); changed(); // draw the new nodes before select() draws belts to them
+}
 const loadLocal = () => { try { return JSON.parse(localStorage.getItem('ffp-graph')); } catch { return null; } };
 
 async function encode(obj) {
@@ -252,9 +267,11 @@ document.addEventListener('keydown', ev => {
   // the browser's own find can't pan the board to a hit, so Ctrl+F goes to our search
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); $('#search').focus(); $('#search').select(); return; }
   if (ev.target.closest('input, select, textarea')) return;
-  if ((ev.key === 'Delete' || ev.key === 'Backspace') && sel) { ev.preventDefault(); removeSelected(); }
+  // Backspace deletes only on a Mac, where it is the delete key; elsewhere it is too easy to hit while clearing a field
+  if ((ev.key === 'Delete' || ev.key === 'Backspace' && /Mac/.test(navigator.platform)) && sel) { ev.preventDefault(); removeSelected(); }
   if (ev.key === 'Escape') select(null);
   const mod = ev.ctrlKey || ev.metaKey, key = ev.key.toLowerCase();
+  if (mod && key === 'z') { ev.preventDefault(); undo(); }
   if (mod && key === 'a') { ev.preventDefault(); selectNodes(G.nodes.map(n => n.id)); }
   if (mod && key === 'c' && selectedIds().length) clip = copySelection();
   if (mod && key === 'v' && clip) {
@@ -499,6 +516,7 @@ function renderResults() {
 // ---------- toolbar ----------
 document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => addNode(b.dataset.add)));
 $('#zoneBtn').addEventListener('click', addZone);
+$('#undoBtn').addEventListener('click', undo);
 $('#exportBtn').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(G, null, 1)], { type: 'application/json' }));
@@ -508,7 +526,7 @@ $('#importBtn').addEventListener('click', () => $('#importFile').click());
 $('#importFile').addEventListener('change', async ev => {
   const file = ev.target.files[0]; ev.target.value = '';
   if (!file) return;
-  try { const g = JSON.parse(await file.text()); if (!valid(g)) throw 0; G = g; G.zones ??= []; select(null); renderCanvas(); changed(); }
+  try { const g = JSON.parse(await file.text()); if (!valid(g)) throw 0; G = g; G.zones ??= []; sel = null; renderCanvas(); select(null); changed(); }
   catch { alert('That file is not a planner export.'); }
 });
 $('#shareBtn').addEventListener('click', async () => {
@@ -517,7 +535,7 @@ $('#shareBtn').addEventListener('click', async () => {
 });
 $('#clearBtn').addEventListener('click', () => {
   if (!confirm('Delete every node and belt? Export first if you want to keep it.')) return;
-  G = { nodes: [], edges: [], zones: [] }; select(null); renderCanvas(); changed();
+  G = { nodes: [], edges: [], zones: [] }; sel = null; renderCanvas(); select(null); changed();
 });
 
 // ---------- boot ----------
