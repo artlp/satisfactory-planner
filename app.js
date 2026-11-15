@@ -163,7 +163,10 @@ world.appendChild(boxEl);
 
 viewport.addEventListener('pointerdown', ev => {
   if (ev.button !== 0) return;
-  const port = ev.target.closest('.port.out'), nodeEl = ev.target.closest('.node'), edge = ev.target.dataset?.edge;
+  // commit a half-edited sidebar field (number, recipe picked from the list) before the click re-renders the panel,
+  // which would remove the field before it ever fires `change`
+  if (document.activeElement?.closest('aside')) document.activeElement.blur();
+  const port =ev.target.closest('.port.out'), nodeEl = ev.target.closest('.node'), edge = ev.target.dataset?.edge;
   const zEl = ev.target.closest('.zt, .zr') && ev.target.closest('.zone');
   const p = toWorld(ev.clientX, ev.clientY);
   viewport.setPointerCapture(ev.pointerId);
@@ -330,7 +333,7 @@ function focusNode(id) {
 }
 
 // ---------- search: nodes by name, recipe, label or any item they use or make; zones by name ----------
-let found = [], foundAt = 0;
+let found = [], foundAt = 0, searchPick = null; // searchPick: what the search last selected
 const searchText = o => (G.zones.includes(o) ? [zoneName(o)]
   : [...nodeTitle(o), ...Object.keys({ ...RES.nodes[o.id]?.maxIn, ...RES.nodes[o.id]?.maxOut }).map(itemName)]).join(' ').toLowerCase();
 const markFound = () => world.querySelectorAll('.node, .zone').forEach(el =>
@@ -343,7 +346,12 @@ function search(step) { // step 0 = new query (first hit), 1 / -1 = next / previ
   $('#searchCount').textContent = found.length ? `${foundAt + 1}/${found.length}` : words.length ? 'none' : '';
   markFound();
   const o = found[foundAt];
-  if (!o) return;
+  if (!o) { // search cleared: drop the selection it made, so nothing stays lit up
+    if (!words.length && searchPick && (sel?.node ?? sel?.zone) === searchPick) select(null);
+    searchPick = null;
+    return;
+  }
+  searchPick = o.id;
   if (!G.zones.includes(o)) return focusNode(o.id);
   const r = viewport.getBoundingClientRect();
   view.k = Math.min(view.k, r.width / (o.w + 80), r.height / (o.h + 80)); // zoom out if the zone doesn't fit
