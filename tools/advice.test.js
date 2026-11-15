@@ -14,6 +14,10 @@ assert(valid({ nodes: [{ id: 'a1', type: 'sink', x: 0, y: 0 }], edges: [] }));
 assert(!valid({ nodes: [], edges: [{ id: '"/><img src=x onerror=alert(1)>', from: 'a', to: 'b' }] }));
 assert(!valid({ nodes: [{ id: 'a', type: 'machine', count: '1"><script>' }], edges: [] }));
 assert(!valid(null));
+const zone = { id: 'z1', label: '<b>North</b>', x: 0, y: 0, w: 400, h: 200, color: '#58a6ff' };
+assert(valid({ nodes: [], edges: [], zones: [zone] }));
+assert(!valid({ nodes: [], edges: [], zones: [{ ...zone, color: 'red;background:url(//evil)' }] }));
+assert(!valid({ nodes: [], edges: [], zones: [{ ...zone, w: '400' }] }));
 
 // 2. starved with nothing connected: says so, and doesn't suggest underclocking to 0%
 let get = run({ nodes: [m('s', 'Recipe_IngotIron_C')], edges: [] });

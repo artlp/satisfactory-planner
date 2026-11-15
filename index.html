@@ -58,6 +58,12 @@
   aside .ex { margin: 3px 0 0; color: var(--muted); font-size: 12px; } aside .issue:hover { background: #2d323b; }
   aside .muted, .muted { color: var(--muted); }
   aside .row { display: flex; gap: 6px; margin-top: 10px; }
+  .zone { position: absolute; border: 2px dashed var(--zc); border-radius: 10px; background: color-mix(in srgb, var(--zc) 7%, transparent); pointer-events: none; }
+  .zone.sel { border-style: solid; }
+  .zone .zt { pointer-events: auto; cursor: move; user-select: none; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 3px 12px; font-size: 15px; font-weight: 600; color: var(--zc); background: var(--panel); border-radius: 8px 0 8px 0; }
+  .zone .zr { pointer-events: auto; position: absolute; right: -2px; bottom: -2px; width: 16px; height: 16px; cursor: nwse-resize;
+    border-right: 4px solid var(--zc); border-bottom: 4px solid var(--zc); border-radius: 0 0 9px 0; }
   .hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }
   @media (max-width: 700px) { main { flex-direction: column; } aside { width: auto; height: 40vh; border-left: 0; border-top: 1px solid var(--line); } }
 </style>
@@ -71,6 +77,7 @@
   <button data-add="merger">+ Merger</button>
   <button data-add="input">+ Input</button>
   <button data-add="sink">+ Sink / Output</button>
+  <button id="zoneBtn" title="Mark an area of your world. Select nodes first to wrap them.">+ Zone</button>
   <span class="sep"></span>
   <label class="inline">New belts <select id="defBelt"></select></label>
   <label class="inline">pipes <select id="defPipe"></select></label>
@@ -84,7 +91,7 @@
 <main>
   <div id="viewport">
     <div id="world"><svg id="wires"></svg></div>
-    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection</div>
+    <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection · + Zone marks an area (drag its name to move it with everything inside)</div>
   </div>
   <aside><div id="form"></div><div id="results"></div></aside>
 </main>

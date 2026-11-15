@@ -11,7 +11,9 @@ const nodeById = id => G.nodes.find(n => n.id === id);
 const ID = /^[\w-]+$/, num = v => v == null || Number.isFinite(v);
 const valid = g => !!g && Array.isArray(g.nodes) && Array.isArray(g.edges) &&
   g.nodes.every(n => n && ID.test(n.id) && typeof n.type === 'string' && ['x', 'y', 'count', 'clock', 'rate', 'target', 'purity'].every(k => num(n[k]))) &&
-  g.edges.every(e => e && ID.test(e.id) && ID.test(e.from) && ID.test(e.to) && num(e.measured));
+  g.edges.every(e => e && ID.test(e.id) && ID.test(e.from) && ID.test(e.to) && num(e.measured)) &&
+  (g.zones === undefined || Array.isArray(g.zones) && g.zones.every(z => z && ID.test(z.id) && /^#[0-9a-f]{6}$/i.test(z.color) &&
+    ['x', 'y', 'w', 'h'].every(k => Number.isFinite(z[k]))));
 const FULL = 0.995; // at or above this a machine counts as 100% and a belt as full
 
 function status(n) {

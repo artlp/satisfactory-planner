@@ -73,7 +73,48 @@ function nodeHTML(n) {
   return `${hasIn ? '<div class="port in"></div>' : ''}<div class="t">${esc(t)}</div>${s ? `<div class="s">${esc(s)}</div>` : ''}${body}${hasOut ? '<div class="port out"></div>' : ''}`;
 }
 
+// ---------- zones: named areas of the world, drawn behind the nodes ----------
+const ZONE_COLORS = { '#f39c32': 'Orange', '#3fb950': 'Green', '#58a6ff': 'Blue', '#d2a8ff': 'Purple', '#e5534b': 'Red', '#e6e6e6': 'White' };
+const zoneById = id => G.zones.find(z => z.id === id);
+const zoneEl = id => world.querySelector(`.zone[data-zone="${id}"]`);
+const inZone = (z, o) => o.x >= z.x && o.x < z.x + z.w && o.y >= z.y && o.y < z.y + z.h; // by top-left corner
+const zoneOf = n => G.zones.filter(z => inZone(z, n)).sort((a, b) => a.w * a.h - b.w * b.h)[0]; // innermost
+const zoneName = z => z.label || 'Unnamed zone';
+const zoneTag = n => { const z = zoneOf(n); return z ? ` <span class="muted">(${esc(zoneName(z))})</span>` : ''; };
+const placeZone = (el, z) => Object.assign(el.style, { left: z.x + 'px', top: z.y + 'px', width: z.w + 'px', height: z.h + 'px' });
+
+function renderZones() {
+  world.querySelectorAll('.zone').forEach(el => el.remove());
+  for (const z of [...G.zones].reverse()) { // later zones on top, so a zone drawn inside another stays clickable
+    const el = document.createElement('div');
+    el.className = `zone ${sel?.zone === z.id ? 'sel' : ''}`;
+    el.dataset.zone = z.id;
+    el.style.setProperty('--zc', z.color);
+    placeZone(el, z);
+    el.innerHTML = `<div class="zt">${esc(zoneName(z))}</div><div class="zr"></div>`;
+    world.prepend(el);
+  }
+}
+
+function addZone() {
+  const ids = selectedIds(), colors = Object.keys(ZONE_COLORS);
+  let x, y, w = 400, h = 260;
+  if (ids.length) { // wrap the selected nodes
+    const box = ids.map(id => { const n = nodeById(id), el = world.querySelector(`.node[data-id="${id}"]`); return [n.x, n.y, n.x + el.offsetWidth, n.y + el.offsetHeight]; });
+    x = Math.min(...box.map(b => b[0])) - 30; y = Math.min(...box.map(b => b[1])) - 50;
+    w = Math.max(...box.map(b => b[2])) - x + 30; h = Math.max(...box.map(b => b[3])) - y + 30;
+  } else {
+    const r = viewport.getBoundingClientRect(), c = toWorld(r.left + r.width / 2, r.top + r.height / 2);
+    x = c.x - w / 2; y = c.y - h / 2;
+  }
+  const z = { id: uid(), label: '', x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), color: colors[G.zones.length % colors.length] };
+  G.zones.push(z);
+  renderZones(); select({ zone: z.id }); save();
+  $('#form [data-k="label"]').focus();
+}
+
 function renderCanvas() {
+  renderZones();
   world.querySelectorAll('.node').forEach(el => el.remove());
   for (const n of G.nodes) {
     const el = document.createElement('div');
@@ -122,10 +163,18 @@ world.appendChild(boxEl);
 viewport.addEventListener('pointerdown', ev => {
   if (ev.button !== 0) return;
   const port = ev.target.closest('.port.out'), nodeEl = ev.target.closest('.node'), edge = ev.target.dataset?.edge;
+  const zEl = ev.target.closest('.zt, .zr') && ev.target.closest('.zone');
   const p = toWorld(ev.clientX, ev.clientY);
   viewport.setPointerCapture(ev.pointerId);
   if (port) drag = { mode: 'wire', from: nodeEl.dataset.id };
-  else if (nodeEl) {
+  else if (zEl) {
+    const z = zoneById(zEl.dataset.zone);
+    select({ zone: z.id });
+    // moving a zone takes the nodes and smaller zones inside it along
+    drag = ev.target.closest('.zr') ? { mode: 'resize', z, start: p, w: z.w, h: z.h }
+      : { mode: 'zone', start: p, moved: false, group: G.nodes.filter(n => inZone(z, n)).map(n => ({ n, x: n.x, y: n.y })),
+        zones: G.zones.filter(o => o === z || inZone(z, o)).map(o => ({ z: o, x: o.x, y: o.y })) };
+  } else if (nodeEl) {
     const id = nodeEl.dataset.id;
     let ids = selectedIds();
     if (ev.shiftKey) selectNodes(ids = ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
@@ -144,8 +193,12 @@ viewport.addEventListener('pointermove', ev => {
   const p = mouse = toWorld(ev.clientX, ev.clientY);
   if (!drag) return;
   if (drag.mode === 'pan') { view.x = ev.clientX - drag.sx; view.y = ev.clientY - drag.sy; drag.moved = true; applyView(); }
-  else if (drag.mode === 'node') {
+  else if (drag.mode === 'resize') {
+    drag.z.w = Math.max(160, Math.round(drag.w + p.x - drag.start.x)); drag.z.h = Math.max(80, Math.round(drag.h + p.y - drag.start.y));
+    placeZone(zoneEl(drag.z.id), drag.z);
+  } else if (drag.mode === 'node' || drag.mode === 'zone') {
     drag.moved = true;
+    for (const g of drag.zones ?? []) { g.z.x = Math.round(g.x + p.x - drag.start.x); g.z.y = Math.round(g.y + p.y - drag.start.y); placeZone(zoneEl(g.z.id), g.z); }
     for (const g of drag.group) {
       g.n.x = Math.round(g.x + p.x - drag.start.x); g.n.y = Math.round(g.y + p.y - drag.start.y);
       const el = world.querySelector(`.node[data-id="${g.n.id}"]`);
@@ -166,6 +219,8 @@ viewport.addEventListener('pointerup', ev => {
     const to = target && nodeById(target.dataset.id);
     if (to && to.id !== drag.from && !['extractor', 'input'].includes(to.type)) connect(drag.from, to.id);
     else renderWires();
+  } else if (drag.mode === 'zone' || drag.mode === 'resize') {
+    if (drag.moved !== false) { save(); renderForm(); } // node count inside may have changed
   } else if (drag.mode === 'node') {
     if (drag.moved) save();
     else if (!drag.shift && drag.group.length > 1) select({ node: drag.click }); // plain click on a group member picks just it
@@ -251,6 +306,7 @@ function removeSelected() {
   G.nodes = G.nodes.filter(n => !ids.includes(n.id));
   G.edges = G.edges.filter(e => !ids.includes(e.from) && !ids.includes(e.to));
   if (sel?.edge) G.edges = G.edges.filter(e => e.id !== sel.edge);
+  if (sel?.zone) { G.zones = G.zones.filter(z => z.id !== sel.zone); renderZones(); }
   select(null);
   changed();
 }
@@ -258,6 +314,7 @@ function removeSelected() {
 function select(s) {
   sel = s;
   world.querySelectorAll('.node').forEach(el => el.classList.toggle('sel', selectedIds().includes(el.dataset.id)));
+  world.querySelectorAll('.zone').forEach(el => el.classList.toggle('sel', sel?.zone === el.dataset.zone));
   renderWires();
   renderForm();
   renderResults();
@@ -278,7 +335,8 @@ function renderForm() {
   const f = $('#form');
   if (sel?.node) {
     const n = nodeById(sel.node);
-    let h = `<h2>${esc(nodeTitle(n)[0])}</h2>` + field('Label', `<input data-k="label" value="${esc(n.label)}" placeholder="optional name">`);
+    const z = zoneOf(n);
+    let h = `<h2>${esc(nodeTitle(n)[0])}</h2>` + (z ? `<div class="muted" style="margin:-4px 0 8px">In zone ${esc(zoneName(z))}</div>` : '') + field('Label', `<input data-k="label" value="${esc(n.label)}" placeholder="optional name">`);
     if (n.type === 'machine') {
       const r = recipe(n.recipe);
       h += field('Recipe', `<input data-k="recipe" list="recipeList" value="${esc(r ? recipeLabel(r) : '')}" placeholder="type to search…">`);
@@ -314,13 +372,19 @@ function renderForm() {
       field(src.type === 'machine' ? 'Output port carries' : 'Only carry (smart splitter filter)',
         `<select data-k="item"><option value="">Any</option>${options(outs, e.item)}</select>`) +
       `<div class="row"><button class="danger" id="delBtn">Delete</button></div>`;
+  } else if (sel?.zone) {
+    const z = zoneById(sel.zone), inside = G.nodes.filter(n => inZone(z, n)).length;
+    f.innerHTML = `<h2>${esc(zoneName(z))}</h2>` + field('Name', `<input data-k="label" value="${esc(z.label)}" placeholder="e.g. North iron field">`) +
+      field('Color', `<select data-k="color">${options(Object.entries(ZONE_COLORS), z.color)}</select>`) +
+      `<div class="muted">${inside} node${inside === 1 ? '' : 's'} inside. Drag the name to move the zone with everything in it; drag the bottom-right corner to resize. Deleting the zone keeps its nodes.</div>` +
+      `<div class="row"><button class="danger" id="delBtn">Delete zone</button></div>`;
   } else if (sel?.nodes) {
     f.innerHTML = `<h2>${sel.nodes.length} nodes selected</h2><div class="muted">Drag any of them to move the group. Ctrl+C / Ctrl+V copies them with the belts between them. Shift+click adds or removes a node.</div>` +
       `<div class="row"><button id="dupBtn">Duplicate</button><button class="danger" id="delBtn">Delete</button></div>`;
   } else f.innerHTML = '';
 
   f.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('change', () => {
-    const obj = sel.node ? nodeById(sel.node) : G.edges.find(x => x.id === sel.edge), k = inp.dataset.k;
+    const obj = sel.node ? nodeById(sel.node) : sel.zone ? zoneById(sel.zone) : G.edges.find(x => x.id === sel.edge), k = inp.dataset.k;
     let v = inp.value;
     if (k === 'recipe') { const r = DATA.recipes.find(r => recipeLabel(r) === v); if (!r) return; v = r.id; }
     else if (inp.type === 'checkbox') v = inp.checked ? Math.round(RES.nodes[obj.id]?.maxOut[mainItem(obj)] ?? 0) || 60 : null;
@@ -367,7 +431,7 @@ function renderResults() {
     const issues = [];
     for (const e of G.edges) {
       const r = RES.edges[e.id];
-      if (r && r.util >= FULL && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(beltName(e))})` +
+      if (r && r.util >= FULL && beltLimits(e)) issues.push({ bad: true, node: e.from, edge: e.id, txt: `<b>Belt full</b> ${esc(nodeTitle(nodeById(e.from))[0])} → ${esc(nodeTitle(nodeById(e.to))[0])}${zoneTag(nodeById(e.from))}: ${fmt(r.total)}/${fmt(r.cap)} (${esc(beltName(e))})` +
         `<p class="ex">This belt is full and something next to it is waiting on it. Upgrade the belt or add a second one.</p>` });
     }
     const under = G.nodes.filter(n => ['machine', 'extractor', 'input'].includes(n.type) && RES.nodes[n.id] && RES.nodes[n.id].util < FULL)
@@ -375,7 +439,7 @@ function renderResults() {
       .sort((a, b) => (a.ex?.knock ?? 0) - (b.ex?.knock ?? 0) || a.r.util - b.r.util); // real causes first, knock-on effects last
     for (const { n, r, ex } of under) {
       issues.push({ bad: r.why?.startsWith('blocked'), knock: ex?.knock, node: n.id,
-        txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])}: ${esc(reasonText(r.why))}` + (ex?.lines ?? []).map(l => `<p class="ex">${esc(l)}</p>`).join('') });
+        txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])}${zoneTag(n)}:${esc(reasonText(r.why))}` + (ex?.lines ?? []).map(l => `<p class="ex">${esc(l)}</p>`).join('') });
     }
     const sinks = {};
     for (const n of G.nodes) {
@@ -396,6 +460,7 @@ function renderResults() {
 
 // ---------- toolbar ----------
 document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => addNode(b.dataset.add)));
+$('#zoneBtn').addEventListener('click', addZone);
 $('#exportBtn').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(G, null, 1)], { type: 'application/json' }));
@@ -405,7 +470,7 @@ $('#importBtn').addEventListener('click', () => $('#importFile').click());
 $('#importFile').addEventListener('change', async ev => {
   const file = ev.target.files[0]; ev.target.value = '';
   if (!file) return;
-  try { const g = JSON.parse(await file.text()); if (!valid(g)) throw 0; G = g; select(null); renderCanvas(); changed(); }
+  try { const g = JSON.parse(await file.text()); if (!valid(g)) throw 0; G = g; G.zones ??= []; select(null); renderCanvas(); changed(); }
   catch { alert('That file is not a planner export.'); }
 });
 $('#shareBtn').addEventListener('click', async () => {
@@ -414,7 +479,7 @@ $('#shareBtn').addEventListener('click', async () => {
 });
 $('#clearBtn').addEventListener('click', () => {
   if (!confirm('Delete every node and belt? Export first if you want to keep it.')) return;
-  G = { nodes: [], edges: [] }; select(null); renderCanvas(); changed();
+  G = { nodes: [], edges: [], zones: [] }; select(null); renderCanvas(); changed();
 });
 
 // ---------- boot ----------
@@ -436,5 +501,6 @@ $('#clearBtn').addEventListener('click', () => {
     history.replaceState(null, '', location.pathname);
   }
   if (!valid(G)) G = sample();
+  G.zones ??= [];
   applyView(); renderCanvas(); select(null); changed();
 })();
