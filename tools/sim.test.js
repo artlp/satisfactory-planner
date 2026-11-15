@@ -78,4 +78,14 @@ r = simulate({ nodes: [{ id: 'f', type: 'input', item: 'Desc_LiquidFuel_C', rate
 near(r.nodes.g.util, 0.75, 'generators run on what fuel arrives');
 assert(r.nodes.g.why === 'starved:Desc_LiquidFuel_C');
 
+// 10. user's case: recycled water loop with more extractor water than needed must not deadlock
+r = simulate({ nodes: [{ id: 'b', type: 'input', item: 'Desc_OreBauxite_C', rate: 600 }, { id: 'c', type: 'input', item: 'Desc_Coal_C', rate: 300 },
+  { id: 'w', type: 'input', item: 'Desc_Water_C', rate: 720 }, { ...m('a', 'Recipe_AluminaSolution_C', 2), clock: 250 }, { ...m('s', 'Recipe_AluminumScrap_C'), clock: 250 }],
+  edges: [e('b', 'a', 'Conveyor Belt Mk.5'), e('c', 's', 'Conveyor Belt Mk.5'), e('w', 'a', 'Pipeline Mk.2'),
+    e('a', 's', 'Pipeline Mk.2', 'Desc_AluminaSolution_C'), e('s', 'a', 'Pipeline Mk.1', 'Desc_Water_C')] }, data);
+near(r.nodes.a.util, 1, 'alumina refineries run full');
+near(r.nodes.s.util, 1, 'scrap refinery runs full');
+near(r.edges['s>a'].total, 300, 'all recycled water used');
+near(r.nodes.w.util, 600 / 720, 'extractors throttle instead');
+
 console.log('all sim tests passed');

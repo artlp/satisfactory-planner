@@ -114,7 +114,10 @@
       // upstream nodes goes first equally often, so mergers share fairly.
       if (t % 2) order.reverse();
       else for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
-      for (const s of order) {
+      // Extractors and inputs push last: when supply exceeds demand they throttle, instead of
+      // backing up a byproduct like recycled water and deadlocking the loop it feeds.
+      const raw = s => s.kind === 'extractor' || s.kind === 'input';
+      for (const s of [...order.filter(s => !raw(s)), ...order.filter(raw)]) {
         const list = outEdges[s.n.id];
         if (!list.length || s.kind === 'sink') continue;
         const pool = s.cap ? s.in : s.out, total = sum(pool);
