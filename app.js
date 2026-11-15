@@ -300,7 +300,10 @@ function connect(from, to) {
   let item = null;
   if (src.type === 'machine') { // pin one product per output, like the game's fixed output ports
     const outs = recipe(src.recipe)?.out.map(o => o[0]) ?? [];
-    if (outs.length > 1) item = outs.find(i => !G.edges.some(e => e.from === from && e.item === i)) ?? outs[0];
+    // prefer what the target consumes (e.g. recycled water back to a refinery), then an output not yet piped
+    const wants = recipe(nodeById(to).recipe)?.in.map(i => i[0]) ?? [];
+    if (outs.length > 1) item = outs.find(i => wants.includes(i))
+      ?? outs.find(i => !G.edges.some(e => e.from === from && e.item === i)) ?? outs[0];
   }
   const carried = item ? [item] : src.type === 'machine' ? recipe(src.recipe)?.out.map(o => o[0]) ?? []
     : src.item ? [src.item] : Object.keys(RES.nodes[from]?.in ?? {});
