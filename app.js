@@ -79,7 +79,8 @@ function nodeHTML(n) {
   if (recipe(n.recipe)?.power) body += `<div class="r">⚡ ${fmt(powerMW(n))} MW</div>`;
   if (r && st && st !== 'ok' && st !== 'idle') body += `<div class="r">${esc(explain(n)?.short ?? reasonText(r.why))}</div>`;
   if (r) {
-    for (const i in r.maxIn) body += `<div class="r">▸ ${esc(itemName(i))} ${fmt(r.in[i])}/${fmt(r.maxIn[i])}</div>`;
+    // flag every short input, not just the one the status line names (two can be short at once)
+    for (const i in r.maxIn) body += `<div class="r${r.util < FULL && r.in[i] < r.maxIn[i] - 0.05 ? ' short' : ''}">▸ ${esc(itemName(i))} ${fmt(r.in[i])}/${fmt(r.maxIn[i])}</div>`;
     for (const i in r.maxOut) body += `<div class="r">◂ ${esc(itemName(i))} ${fmt(r.out[i])}/${fmt(r.maxOut[i])}${i in r.unconnected ? ' → storage' : ''}</div>`;
     if (n.type === 'sink' || JUNCTIONS.includes(n.type))
       for (const i in r.in) body += `<div class="r">${esc(itemName(i))} ${fmt(r.in[i])}/min</div>`;
