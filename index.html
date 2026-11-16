@@ -66,8 +66,10 @@
     padding: 3px 12px; font-size: 15px; font-weight: 600; color: var(--zc); background: var(--panel); border-radius: 8px 0 8px 0; }
   .zone .zr { pointer-events: auto; position: absolute; right: -2px; bottom: -2px; width: 16px; height: 16px; cursor: nwse-resize;
     border-right: 4px solid var(--zc); border-bottom: 4px solid var(--zc); border-radius: 0 0 9px 0; }
+  #minimap { position: absolute; right: 10px; bottom: 10px; width: 200px; height: 140px; z-index: 6; cursor: pointer;
+    background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); border-radius: 6px; }
   .hint { position: absolute; left: 10px; bottom: 8px; color: var(--muted); font-size: 12px; pointer-events: none; }
-  @media (max-width: 700px) { main { flex-direction: column; } aside { width: auto; height: 40vh; border-left: 0; border-top: 1px solid var(--line); } }
+  @media (max-width: 700px) { main { flex-direction: column; } #minimap { width: 140px; height: 100px; } aside { width: auto; height: 40vh; border-left: 0; border-top: 1px solid var(--line); } }
 </style>
 </head>
 <body>
@@ -97,6 +99,7 @@
 <main>
   <div id="viewport">
     <div id="world"><svg id="wires"></svg></div>
+    <canvas id="minimap" title="Click or drag to move the view"></canvas>
     <div class="hint">Drag from a node's right dot to another node to add a belt · drag background to pan · wheel to zoom · Shift+click or Shift+drag selects several · Ctrl+C / Ctrl+V copies · Del removes selection · Ctrl+Z undoes · + Zone marks an area (drag its name to move it with everything inside)</div>
   </div>
   <aside><div id="form"></div><div id="results"></div></aside>

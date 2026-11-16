@@ -73,7 +73,40 @@ const applyView = () => {
   world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.k})`;
   viewport.style.backgroundPosition = `${view.x}px ${view.y}px`;
   viewport.style.backgroundSize = `${24 * view.k}px ${24 * view.k}px`;
+  drawMinimap();
 };
+
+// ---------- minimap: whole build in the corner, click or drag it to move the view ----------
+const mini = $('#minimap'), miniCtx = mini.getContext('2d');
+let miniMap = null; // world → minimap transform from the last draw, so clicks map back
+function drawMinimap() {
+  if (!G) return;
+  const r = viewport.getBoundingClientRect(), css = getComputedStyle(document.documentElement);
+  const seen = { x: -view.x / view.k, y: -view.y / view.k, w: r.width / view.k, h: r.height / view.k };
+  const boxes = G.nodes.map(n => { const el = world.querySelector(`.node[data-id="${n.id}"]`); return { n, x: n.x, y: n.y, w: el?.offsetWidth ?? 180, h: el?.offsetHeight ?? 80 }; });
+  const all = [...boxes, ...G.zones, seen];
+  const x0 = Math.min(...all.map(b => b.x)) - 40, y0 = Math.min(...all.map(b => b.y)) - 40;
+  const x1 = Math.max(...all.map(b => b.x + b.w)) + 40, y1 = Math.max(...all.map(b => b.y + b.h)) + 40;
+  const W = mini.clientWidth, H = mini.clientHeight, dpr = devicePixelRatio || 1;
+  if (mini.width !== W * dpr) { mini.width = W * dpr; mini.height = H * dpr; }
+  const s = Math.min(W / (x1 - x0), H / (y1 - y0)), ox = (W - (x1 - x0) * s) / 2 - x0 * s, oy = (H - (y1 - y0) * s) / 2 - y0 * s;
+  miniMap = { s, ox, oy };
+  const c = miniCtx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  for (const z of G.zones) { c.strokeStyle = z.color; c.lineWidth = 1; c.strokeRect(ox + z.x * s, oy + z.y * s, z.w * s, z.h * s); }
+  const col = { ok: '--ok', starved: '--warn', blocked: '--bad' };
+  for (const b of boxes) { c.fillStyle = css.getPropertyValue(col[status(b.n)] ?? '--idle'); c.fillRect(ox + b.x * s, oy + b.y * s, Math.max(2, b.w * s), Math.max(2, b.h * s)); }
+  c.strokeStyle = css.getPropertyValue('--accent'); c.lineWidth = 1.5;
+  c.strokeRect(ox + seen.x * s, oy + seen.y * s, seen.w * s, seen.h * s);
+}
+const miniJump = ev => { // centre the view on the clicked minimap point
+  const b = mini.getBoundingClientRect(), r = viewport.getBoundingClientRect(), { s, ox, oy } = miniMap;
+  view.x = r.width / 2 - (ev.clientX - b.left - ox) / s * view.k; view.y = r.height / 2 - (ev.clientY - b.top - oy) / s * view.k;
+  applyView();
+};
+mini.addEventListener('pointerdown', ev => { ev.stopPropagation(); mini.setPointerCapture(ev.pointerId); miniJump(ev); });
+mini.addEventListener('pointermove', ev => { ev.stopPropagation(); if (mini.hasPointerCapture(ev.pointerId)) miniJump(ev); });
+mini.addEventListener('wheel', ev => ev.stopPropagation());
+addEventListener('resize', drawMinimap);
 
 function nodeHTML(n) {
   const r = RES.nodes[n.id], [t, s] = nodeTitle(n), st = status(n);
@@ -175,6 +208,7 @@ function renderWires(temp) {
   }
   if (temp) svg += `<path class="temp" d="${curve(temp.a, temp.b)}"/>`;
   wires.innerHTML = svg;
+  drawMinimap(); // nodes moved or redrawn
 }
 
 // ---------- interaction ----------
