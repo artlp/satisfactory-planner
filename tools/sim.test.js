@@ -96,4 +96,14 @@ near(r.edges['sp>f'].total, 187.5, 'foundry gets all it needs');
 near(r.edges['sp>k'].total, 62.5, 'only the excess overflows');
 near(r.nodes.f.util, 1, 'foundry full');
 
+// 12. two inputs short at once are both reported: 240 coal of 260, 480 alumina of 520
+r = simulate({ nodes: [{ id: 'al', type: 'input', item: 'Desc_AluminaSolution_C', rate: 480 }, { id: 'co', type: 'input', item: 'Desc_Coal_C', rate: 240 },
+  { ...m('s', 'Recipe_AluminumScrap_C'), clock: 216.6667 }], edges: [e('al', 's', 'Pipeline Mk.2'), e('co', 's', 'Conveyor Belt Mk.3')] }, data);
+assert.deepStrictEqual(r.nodes.s.short.sort(), ['Desc_AluminaSolution_C', 'Desc_Coal_C']);
+assert.deepStrictEqual(simulate({ nodes: [miner('a'), m('s', 'Recipe_IngotIron_C')], edges: [e('a', 's')] }, data).nodes.s.short, [], 'full machine has no short inputs');
+// a blocked machine's inputs are not short: 60 ore, smelter blocked by a 30-capped output belt
+r = simulate({ nodes: [miner('a'), m('s', 'Recipe_IngotIron_C', 2), { id: 'k', type: 'sink' }],
+  edges: [e('a', 's'), { ...e('s', 'k'), measured: 30 }] }, data);
+assert.deepStrictEqual(r.nodes.s.short, [], 'blocked machine has no short inputs');
+
 console.log('all sim tests passed');

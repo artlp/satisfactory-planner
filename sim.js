@@ -14,7 +14,7 @@
     const outEdges = {}, inEdges = {};
 
     for (const n of graph.nodes) {
-      const s = S[n.id] = { n, need: {}, make: {}, in: {}, out: {}, p: 0, why: {}, kind: n.type };
+      const s = S[n.id] = { n, need: {}, make: {}, in: {}, out: {}, p: 0, why: {}, short: {}, kind: n.type };
       outEdges[n.id] = []; inEdges[n.id] = [];
       const k = (n.count ?? 1) * (n.clock ?? 100) / 100;
       if (n.type === 'machine' && recipes[n.recipe]) {
@@ -111,6 +111,8 @@
         for (const i in s.need) { const f = (s.in[i] || 0) / s.need[i]; if (f < p) { p = f; why = 'starved:' + i; } }
         for (const i in s.make) { const f = (s.make[i] * BUF - (s.out[i] || 0)) / s.make[i]; if (f < p) { p = Math.max(0, f); why = 'blocked:' + i; } }
         if (!Object.keys(s.make).length && !Object.keys(s.need).length) { p = 0; why = 'unconfigured'; } // generators only consume
+        // every input that ran dry this tick, not just the first found (two can limit at once)
+        if (measuring && p < 0.999) for (const i in s.need) if ((s.in[i] || 0) / s.need[i] <= p + 1e-3) s.short[i] = (s.short[i] || 0) + 1;
         for (const i in s.need) s.in[i] -= s.need[i] * p;
         for (const i in s.make) s.out[i] = (s.out[i] || 0) + s.make[i] * p;
         for (const i of s.free) { if (measuring) s.dump[i] = (s.dump[i] || 0) + s.out[i]; s.out[i] = 0; }
@@ -151,12 +153,20 @@
     for (const s of Object.values(S)) {
       const util = s.p / MEASURE;
       const why = Object.entries(s.why).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-      const r = { util, why, in: {}, out: {}, maxIn: {}, maxOut: {}, unconnected: {} };
+      const r = { util, why, in: {}, out: {}, maxIn: {}, maxOut: {}, unconnected: {}, short: Object.keys(s.short).filter(i => s.short[i] >= MEASURE / 4) };
       for (const i in s.dump) r.unconnected[i] = s.dump[i] * perMin;
       for (const i in s.need) { r.maxIn[i] = s.need[i] * 60; r.in[i] = s.need[i] * 60 * util; }
       for (const i in s.make) { r.maxOut[i] = s.make[i] * 60; r.out[i] = s.make[i] * 60 * util; }
       if (s.kind === 'sink') for (const i in s.out) r.in[i] = s.out[i] * perMin;
       nodes[s.n.id] = r;
+    }
+    // An input is also short when everything feeding it is maxed out (source can't make more, or belt full):
+    // two inputs that run out at exactly the same rate never both look dry tick by tick.
+    for (const s of Object.values(S)) if (nodes[s.n.id].util < 0.995) for (const i in s.need) {
+      const feeds = inEdges[s.n.id].filter(E => (!E.e.item || E.e.item === i) && (S[E.e.from].make[i] || E.flow[i]));
+      const maxed = E => sum(E.flow) * perMin >= E.cap * 60 * 0.995 ||
+        (!S[E.e.from].cap && S[E.e.from].make[i] && !nodes[E.e.from].why?.startsWith('blocked'));
+      if (feeds.length && feeds.every(maxed) && !nodes[s.n.id].short.includes(i)) nodes[s.n.id].short.push(i);
     }
     for (const s of Object.values(S)) if (s.cap) {
       const r = nodes[s.n.id];
