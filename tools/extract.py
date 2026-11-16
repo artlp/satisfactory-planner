@@ -65,6 +65,13 @@ for k in ("FGBuildableResourceExtractor", "FGBuildableWaterPump", "FGBuildableFr
                            "rate": round(per_cycle / float(c["mExtractCycleTime"]) * 60, 3)})
         used.update(allowed)
 
+# MW a building draws at 100% clock. Variable-power ones (collider, converter, encoder) use the average of their cycle.
+power_use = {}
+for k in ("FGBuildableManufacturer", "FGBuildableManufacturerVariablePower", "FGBuildableResourceExtractor", "FGBuildableWaterPump", "FGBuildableFrackingActivator"):
+    for c in G.get(k, []):
+        lo, hi = c.get("mEstimatedMininumPowerConsumption"), c.get("mEstimatedMaximumPowerConsumption")
+        power_use[c["ClassName"]] = (float(lo) + float(hi)) / 2 if hi else float(c["mPowerConsumption"])
+
 belts = sorted({(c["mDisplayName"], float(c["mSpeed"]) / 2) for c in G["FGBuildableConveyorBelt"]}, key=lambda b: b[1])
 pipes = sorted({(c["mDisplayName"].replace("Clean ", ""), float(c["mFlowLimit"]) * 60) for c in G["FGBuildablePipeline"]}, key=lambda b: b[1])
 
@@ -73,6 +80,7 @@ out = {
     "buildings": buildings,
     "recipes": sorted(recipes, key=lambda r: r["name"]),
     "extractors": extractors,
+    "powerUse": power_use,
     "belts": [{"name": n, "rate": r} for n, r in belts],
     "pipes": [{"name": n, "rate": r, "fluid": True} for n, r in pipes],
 }

@@ -7,6 +7,11 @@ const pct = v => Math.round(v * 100) + '%';
 const tiers = () => [...DATA.belts, ...DATA.pipes];
 const recipeLabel = r => `${r.name} — ${DATA.buildings[r.building]}`;
 // MW a generator node makes right now (power scales linearly with clock and count)
+// MW a machine or extractor draws at full speed: base × (clock/100)^1.321929 per building, as in the game
+const powerMax = n => (DATA.powerUse?.[n.type === 'machine' ? recipe(n.recipe)?.building : n.type === 'extractor' ? n.extractor : null] ?? 0)
+  * (n.count ?? 1) * ((n.clock ?? 100) / 100) ** 1.321929;
+// ...and right now: machines only draw while working, so it scales with utilisation
+const powerUse = n => powerMax(n) * (RES.nodes[n.id]?.util ?? 0);
 const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.recipe).power * n.count * n.clock / 100 * (RES.nodes[n.id]?.util ?? 0) : 0;
 
 // ---------- persistence ----------
@@ -76,7 +81,8 @@ function nodeHTML(n) {
   if (r && !JUNCTIONS.includes(n.type) && n.type !== 'sink' && r.why !== 'unconfigured')
     body += `<div class="u">${pct(r.util)}</div>`;
   if (n.target && mainItem(n)) body += `<div class="r">🎯 want ${fmt(n.target)}/min</div>`;
-  if (recipe(n.recipe)?.power) body += `<div class="r">⚡ ${fmt(powerMW(n))} MW</div>`;
+  if (recipe(n.recipe)?.power) body += `<div class="r">⚡ makes ${fmt(powerMW(n))} MW</div>`;
+  else if (powerMax(n)) body += `<div class="r">⚡ uses ${fmt(powerUse(n))}/${fmt(powerMax(n))} MW</div>`;
   if (r && st && st !== 'ok' && st !== 'idle') {
     const also = (r.short ?? []).filter(i => r.why !== 'starved:' + i).map(itemName);
     body += `<div class="r">${esc((explain(n)?.short ?? reasonText(r.why)) + (also.length ? ` · also short on ${also.join(', ')}` : ''))}</div>`;
@@ -483,7 +489,8 @@ function renderResults() {
     if (n.target && mainItem(n)) h += `<h3>To make ${fmt(n.target)} ${esc(itemName(mainItem(n)))}/min</h3>` +
       plan(n, mainItem(n), n.target).map(l => `<p class="ex" style="padding-left:${l.depth * 14}px">${l.depth ? '↳ ' : ''}${esc(l.t)}</p>`).join('');
     if (Object.keys(r.maxIn).length) h += `<h3>Consumes /min</h3>` + rateTable(Object.keys(r.maxIn).map(i => [esc(itemName(i)), `${fmt(r.in[i])} / ${fmt(r.maxIn[i])}`]));
-    if (recipe(n.recipe)?.power) h += `<h3>Power: ${fmt(powerMW(n))} MW</h3>`;
+    if (recipe(n.recipe)?.power) h += `<h3>Power made: ${fmt(powerMW(n))} MW</h3>`;
+    else if (powerMax(n)) h += `<h3>Power used: ${fmt(powerUse(n))} / ${fmt(powerMax(n))} MW</h3>`;
     if (Object.keys(r.maxOut).length) h += `<h3>Produces /min</h3>` + rateTable(Object.keys(r.maxOut).map(i => [esc(itemName(i)) + (i in r.unconnected ? ' <span class="muted">(not connected, counted as storage)</span>' : ''), `${fmt(r.out[i])} / ${fmt(r.maxOut[i])}`]));
     if (n.type === 'sink' || JUNCTIONS.includes(n.type)) h += `<h3>Throughput /min</h3>` + rateTable(Object.entries(r.in).map(([i, v]) => [esc(itemName(i)), fmt(v)]));
     el.innerHTML = h;
@@ -513,6 +520,8 @@ function renderResults() {
     el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
       (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
       (G.nodes.some(powerMW) ? `<h3>Power made: ${fmt(G.nodes.reduce((a, n) => a + powerMW(n), 0))} MW</h3>` : '') +
+      (G.nodes.some(powerMax) ? `<h3>Power used: ${fmt(G.nodes.reduce((a, n) => a + powerUse(n), 0))} MW</h3>` +
+        `<div class="muted">${fmt(G.nodes.reduce((a, n) => a + powerMax(n), 0))} MW if every machine ran at 100%. Overclocking raises power faster than speed (×1.32 power curve).</div>` : '') +
       `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
       `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
       `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full and slowing something down. Yellow belts are exactly full with nothing waiting: perfect, but no room to grow. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
