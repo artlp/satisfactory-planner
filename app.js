@@ -511,6 +511,23 @@ function rateTable(rows) {
   return rows.length ? `<table>${rows.map(([a, b]) => `<tr><td>${a}</td><td class="n">${b}</td></tr>`).join('')}</table>` : '<div class="muted">—</div>';
 }
 
+// Storage balance per item: outputs into storage (sinks, unbelted outputs) vs Input nodes pulling from it.
+function storageTable(nodes) {
+  const b = {}, add = (i, k, v) => { (b[i] ??= [0, 0])[k] += v; };
+  for (const n of nodes) {
+    const r = RES.nodes[n.id];
+    if (!r) continue;
+    for (const [i, v] of Object.entries((n.type === 'sink' ? r.in : r.unconnected) ?? {})) add(i, 0, v);
+    if (n.type === 'input') for (const [i, v] of Object.entries(r.out)) add(i, 1, v);
+  }
+  const rows = Object.entries(b).sort((x, y) => itemName(x[0]).localeCompare(itemName(y[0])));
+  return rows.length ? `<table><tr class="muted"><td></td><td class="n">in</td><td class="n">out</td><td class="n">net</td></tr>` +
+    rows.map(([i, [m, u]]) => `<tr><td>${esc(itemName(i))}</td><td class="n">${fmt(m)}</td><td class="n">${fmt(u)}</td>` +
+      `<td class="n" style="${m - u < -1e-6 ? 'color:var(--bad)' : ''}">${m - u > 1e-6 ? '+' : ''}${fmt(m - u)}</td></tr>`).join('') + '</table>'
+    : '<div class="muted">—</div>';
+}
+const storageNote = '<div class="muted">In = sinks plus any output with no belt attached. Out = Input nodes taking from storage. Red net = taking more than is made.</div>';
+
 function renderResults() {
   const el = $('#results');
   if (sel?.node) {
@@ -532,6 +549,9 @@ function renderResults() {
     const r = RES.edges[sel.edge];
     el.innerHTML = r ? `<h3>Carrying ${fmt(r.total)} / ${fmt(r.cap)} per min (${pct(r.util)})</h3>` +
       rateTable(Object.entries(r.flow).map(([i, v]) => [esc(itemName(i)), fmt(v)])) : '';
+  } else if (sel?.zone) {
+    const z = zoneById(sel.zone);
+    el.innerHTML = `<h3>Storage /min in this zone</h3>` + storageTable(G.nodes.filter(n => zoneOf(n) === z)) + storageNote;
   } else {
     const issues = [];
     for (const e of G.edges) {
@@ -546,18 +566,12 @@ function renderResults() {
       issues.push({ bad: r.why?.startsWith('blocked'), knock: ex?.knock, node: n.id,
         txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])}${zoneTag(n)}:${esc(reasonText(r.why))}` + (ex?.lines ?? []).map(l => `<p class="ex">${esc(l)}</p>`).join('') });
     }
-    const sinks = {};
-    for (const n of G.nodes) {
-      const r = RES.nodes[n.id];
-      for (const [i, v] of Object.entries((n.type === 'sink' ? r?.in : r?.unconnected) ?? {})) sinks[i] = (sinks[i] || 0) + v;
-    }
     el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
       (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
       (G.nodes.some(powerMW) ? `<h3>Power made: ${fmt(G.nodes.reduce((a, n) => a + powerMW(n), 0))} MW</h3>` : '') +
       (G.nodes.some(powerMax) ? `<h3>Power used: ${fmt(G.nodes.reduce((a, n) => a + powerUse(n), 0))} MW</h3>` +
         `<div class="muted">${fmt(G.nodes.reduce((a, n) => a + powerMax(n), 0))} MW if every machine ran at 100%. Overclocking raises power faster than speed (×1.32 power curve).</div>` : '') +
-      `<h3>Factory output /min</h3>` + rateTable(Object.entries(sinks).map(([i, v]) => [esc(itemName(i)), fmt(v)])) +
-      `<div class="muted">Sinks plus any output with no belt attached (counted as going to storage).</div>` +
+      `<h3>Storage /min</h3>` + storageTable(G.nodes) + storageNote +
       `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full and slowing something down. Yellow belts are exactly full with nothing waiting: perfect, but no room to grow. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
     el.querySelectorAll('.issue').forEach(d => d.addEventListener('click', () => {
       const x = issues[d.dataset.k]; focusNode(x.node); if (x.edge) select({ edge: x.edge });
