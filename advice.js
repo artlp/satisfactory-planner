@@ -10,7 +10,7 @@ const nodeById = id => G.nodes.find(n => n.id === id);
 // A build from a share link or a file is untrusted, and its ids and numbers end up in HTML, so check them.
 const ID = /^[\w-]+$/, num = v => v == null || Number.isFinite(v);
 const valid = g => !!g && Array.isArray(g.nodes) && Array.isArray(g.edges) &&
-  g.nodes.every(n => n && ID.test(n.id) && typeof n.type === 'string' && ['x', 'y', 'count', 'clock', 'rate', 'target', 'purity'].every(k => num(n[k]))) &&
+  g.nodes.every(n => n && ID.test(n.id) && typeof n.type === 'string' && ['x', 'y', 'count', 'clock', 'rate', 'target', 'purity', 'sloops'].every(k => num(n[k]))) &&
   g.edges.every(e => e && ID.test(e.id) && ID.test(e.from) && ID.test(e.to) && num(e.measured)) &&
   (g.zones === undefined || Array.isArray(g.zones) && g.zones.every(z => z && ID.test(z.id) && /^#[0-9a-f]{6}$/i.test(z.color) &&
     ['x', 'y', 'w', 'h'].every(k => Number.isFinite(z[k]))));
@@ -174,8 +174,8 @@ function explain(n, seen = new Set()) {
 function nodeTitle(n) {
   if (n.type === 'machine') {
     const r = recipe(n.recipe);
-    const clock = n.clock !== 100 ? ` @${n.clock}%` : '';
-    return [(n.label || (r ? DATA.buildings[r.building] : 'Machine')) + ` ×${n.count}${clock}`, r ? r.name : 'pick a recipe'];
+    const clock = n.clock !== 100 ? ` @${n.clock}%` : '', sl = n.sloops ? ` ✦${n.sloops}` : '';
+    return [(n.label || (r ? DATA.buildings[r.building] : 'Machine')) + ` ×${n.count}${clock}${sl}`, r ? r.name : 'pick a recipe'];
   }
   if (n.type === 'extractor') {
     const e = extractor(n.extractor);

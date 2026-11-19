@@ -72,6 +72,11 @@ for k in ("FGBuildableManufacturer", "FGBuildableManufacturerVariablePower", "FG
         lo, hi = c.get("mEstimatedMininumPowerConsumption"), c.get("mEstimatedMaximumPowerConsumption")
         power_use[c["ClassName"]] = (float(lo) + float(hi)) / 2 if hi else float(c["mPowerConsumption"])
 
+# Somersloop slots per building: each filled slot adds mProductionShardBoostMultiplier to output (full = x2).
+sloops = {c["ClassName"]: round(1 / float(c["mProductionShardBoostMultiplier"]))
+          for k in ("FGBuildableManufacturer", "FGBuildableManufacturerVariablePower") for c in G[k]
+          if c.get("mCanChangeProductionBoost") == "True"}
+
 belts = sorted({(c["mDisplayName"], float(c["mSpeed"]) / 2) for c in G["FGBuildableConveyorBelt"]}, key=lambda b: b[1])
 pipes = sorted({(c["mDisplayName"].replace("Clean ", ""), float(c["mFlowLimit"]) * 60) for c in G["FGBuildablePipeline"]}, key=lambda b: b[1])
 
@@ -81,6 +86,7 @@ out = {
     "recipes": sorted(recipes, key=lambda r: r["name"]),
     "extractors": extractors,
     "powerUse": power_use,
+    "sloops": sloops,
     "belts": [{"name": n, "rate": r} for n, r in belts],
     "pipes": [{"name": n, "rate": r, "fluid": True} for n, r in pipes],
 }

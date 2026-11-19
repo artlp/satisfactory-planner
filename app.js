@@ -8,8 +8,11 @@ const tiers = () => [...DATA.belts, ...DATA.pipes];
 const recipeLabel = r => `${r.name} — ${DATA.buildings[r.building]}`;
 // MW a generator node makes right now (power scales linearly with clock and count)
 // MW a machine or extractor draws at full speed: base × (clock/100)^1.321929 per building, as in the game
+// Somersloops multiply that by (output boost)^2.
+const slots = n => n.type === 'machine' ? DATA.sloops?.[recipe(n.recipe)?.building] ?? 0 : 0;
+const amp = n => slots(n) ? 1 + Math.min(n.sloops ?? 0, slots(n)) / slots(n) : 1;
 const powerMax = n => (DATA.powerUse?.[n.type === 'machine' ? recipe(n.recipe)?.building : n.type === 'extractor' ? n.extractor : null] ?? 0)
-  * (n.count ?? 1) * ((n.clock ?? 100) / 100) ** 1.321929;
+  * (n.count ?? 1) * ((n.clock ?? 100) / 100) ** 1.321929 * amp(n) ** 2;
 // ...and right now: machines only draw while working, so it scales with utilisation
 const powerUse = n => powerMax(n) * (RES.nodes[n.id]?.util ?? 0);
 const powerMW = n => n.type === 'machine' && recipe(n.recipe)?.power ? recipe(n.recipe).power * n.count * n.clock / 100 * (RES.nodes[n.id]?.util ?? 0) : 0;
@@ -444,6 +447,8 @@ function renderForm() {
       h += field('Recipe', `<input data-k="recipe" list="recipeList" value="${esc(r ? recipeLabel(r) : '')}" placeholder="type to search…">`);
       h += field('Machines', `<input data-k="count" type="number" min="1" step="1" value="${n.count}">`);
       h += field('Clock speed %', `<input data-k="clock" type="number" min="1" max="250" step="any" value="${n.clock}">`);
+      if (slots(n)) h += field(`Somersloops per machine (0–${slots(n)})`, `<input data-k="sloops" type="number" min="0" max="${slots(n)}" step="1" value="${n.sloops ?? 0}">`) +
+        (n.sloops ? `<div class="muted">Output ×${fmt(amp(n))}, power ×${fmt(amp(n) ** 2)}. ${n.sloops * n.count} somersloops in total.</div>` : '');
       if (r) h += `<div class="muted">Per machine @100%: ${r.in.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`).join(' + ')} → ${[...r.out.map(([i, a]) => `${fmt(a * 60 / r.time)} ${esc(itemName(i))}`), r.power && `${fmt(r.power)} MW`].filter(Boolean).join(' + ')}${r.out.length ? ' /min' : ''}</div>`;
     } else if (n.type === 'extractor') {
       const ex = extractor(n.extractor);
@@ -496,6 +501,7 @@ function renderForm() {
       v = Number(v);
       if (k === 'clock') v = Math.min(250, Math.max(1, v || 100));
       if (k === 'count') v = Math.max(1, Math.round(v) || 1);
+      if (k === 'sloops') v = Math.min(slots(obj), Math.max(0, Math.round(v) || 0)) || null;
       if (k === 'rate') v = Math.max(0, v || 0);
       if (k === 'measured' || k === 'target') v = v > 0 ? v : null;
     } else if (v === '') v = k === 'label' ? '' : null;

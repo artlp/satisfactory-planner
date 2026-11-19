@@ -20,7 +20,9 @@
       if (n.type === 'machine' && recipes[n.recipe]) {
         const r = recipes[n.recipe];
         for (const [i, a] of r.in) s.need[i] = (s.need[i] || 0) + a * k / r.time;
-        for (const [i, a] of r.out) s.make[i] = (s.make[i] || 0) + a * k / r.time;
+        // somersloops: each filled slot adds 1/slots to output, inputs unchanged (all slots = double)
+        const slots = data.sloops?.[r.building] ?? 0, amp = slots ? 1 + Math.min(n.sloops ?? 0, slots) / slots : 1;
+        for (const [i, a] of r.out) s.make[i] = (s.make[i] || 0) + a * k * amp / r.time;
       } else if (n.type === 'extractor' && extractors[n.extractor] && n.item) {
         s.make[n.item] = extractors[n.extractor].rate * (n.purity ?? 1) * k / 60;
       } else if (n.type === 'input' && n.item) {

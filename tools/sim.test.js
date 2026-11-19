@@ -106,4 +106,12 @@ r = simulate({ nodes: [miner('a'), m('s', 'Recipe_IngotIron_C', 2), { id: 'k', t
   edges: [e('a', 's'), { ...e('s', 'k'), measured: 30 }] }, data);
 assert.deepStrictEqual(r.nodes.s.short, [], 'blocked machine has no short inputs');
 
+// somersloops: assembler (2 slots) with 1 sloop makes x1.5 from the same input; over the slot count clamps to x2
+r = simulate({ nodes: [{ id: 'i', type: 'input', item: 'Desc_IronPlate_C', rate: 30 }, { id: 'j', type: 'input', item: 'Desc_IronScrew_C', rate: 60 },
+  { ...m('a', 'Recipe_IronPlateReinforced_C'), sloops: 1 }], edges: [e('i', 'a'), e('j', 'a')] }, data);
+near(r.nodes.a.maxOut.Desc_IronPlateReinforced_C, 7.5, 'half-filled amplifier');
+near(r.nodes.a.maxIn.Desc_IronPlate_C, 30, 'amplifier keeps inputs');
+r = simulate({ nodes: [{ ...m('c', 'Recipe_IronPlate_C'), sloops: 5 }], edges: [] }, data);
+near(r.nodes.c.maxOut.Desc_IronPlate_C, 40, 'amplifier capped at slot count');
+
 console.log('all sim tests passed');
