@@ -534,6 +534,10 @@ function storageTable(nodes) {
 }
 const storageNote = '<div class="muted">In = sinks plus any output with no belt attached. Out = Input nodes taking from storage. Red net = taking more than is made.</div>';
 
+// results re-render after every sim, so remember whether the issues list is collapsed
+let issuesOpen = true;
+try { issuesOpen = localStorage.getItem('issuesOpen') !== '0'; } catch {}
+
 function renderResults() {
   const el = $('#results');
   if (sel?.node) {
@@ -572,13 +576,14 @@ function renderResults() {
       issues.push({ bad: r.why?.startsWith('blocked'), knock: ex?.knock, node: n.id,
         txt: `<b>${pct(r.util)}</b> ${esc(nodeTitle(n)[0])}${zoneTag(n)}:${esc(reasonText(r.why))}` + (ex?.lines ?? []).map(l => `<p class="ex">${esc(l)}</p>`).join('') });
     }
-    el.innerHTML = `<h2>Overview</h2><h3>Bottlenecks & underused (${issues.length})</h3>` +
-      (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') +
+    el.innerHTML = `<h2>Overview</h2><details id="issues" ${issuesOpen ? 'open' : ''}><summary><h3>Bottlenecks & underused (${issues.length})</h3></summary>` +
+      (issues.length ? issues.map((x, k) => `<div class="issue ${x.bad ? 'bad' : ''} ${x.knock ? 'knock' : ''}" data-k="${k}">${x.txt}</div>`).join('') : '<div class="muted">Everything runs at 100%.</div>') + '</details>' +
       (G.nodes.some(powerMW) ? `<h3>Power made: ${fmt(G.nodes.reduce((a, n) => a + powerMW(n), 0))} MW</h3>` : '') +
       (G.nodes.some(powerMax) ? `<h3>Power used: ${fmt(G.nodes.reduce((a, n) => a + powerUse(n), 0))} MW</h3>` +
         `<div class="muted">${fmt(G.nodes.reduce((a, n) => a + powerMax(n), 0))} MW if every machine ran at 100%. Overclocking raises power faster than speed (×1.32 power curve).</div>` : '') +
       `<h3>Storage /min</h3>` + storageTable(G.nodes) + storageNote +
       `<h3>How to read it</h3><div class="muted">Green = running at 100%. Yellow = not enough input coming in. Red = makes more than the next step can use, so it slows down. Red belts are full and slowing something down. Yellow belts are exactly full with nothing waiting: perfect, but no room to grow. Numbers are actual / maximum per minute. Problems marked as knock-on effects are caused by another problem; fix the ones at the top first.</div>`;
+    $('#issues').addEventListener('toggle', ev => { issuesOpen = ev.target.open; try { localStorage.setItem('issuesOpen', issuesOpen ? '1' : '0'); } catch {} });
     el.querySelectorAll('.issue').forEach(d => d.addEventListener('click', () => {
       const x = issues[d.dataset.k]; focusNode(x.node); if (x.edge) select({ edge: x.edge });
     }));
